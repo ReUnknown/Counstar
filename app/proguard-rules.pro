@@ -1,0 +1,41 @@
+# Counstar's shrinking rules (copied from Wave).
+#
+# Shrinking and optimizing is where the speed comes from; renaming classes buys almost nothing
+# and makes crash reports unreadable, so it's off.
+-dontobfuscate
+-keepattributes *Annotation*, Signature, InnerClasses, EnclosingMethod, SourceFile, LineNumberTable, RuntimeVisible*Annotations
+
+# YouTube Music client (Metrolist innertube + InnerTubeX): JSON models and stream extraction,
+# some of it reflective. Kept whole: correctness over a few hundred KB.
+-keep class com.metrolist.** { *; }
+-dontwarn com.metrolist.**
+
+# kotlinx.serialization
+-keepclassmembers @kotlinx.serialization.Serializable class ** {
+    *** Companion;
+    *** INSTANCE;
+    kotlinx.serialization.KSerializer serializer(...);
+}
+-keep,includedescriptorclasses class **$$serializer { *; }
+-keepclasseswithmembers class * { kotlinx.serialization.KSerializer serializer(...); }
+
+# Ktor finds its engine and JSON support through ServiceLoader (R8 keeps META-INF/services
+# entries); the rest of it shrinks like any other library.
+-keep class * implements io.ktor.client.HttpClientEngineContainer
+-keep class io.ktor.client.engine.okhttp.** { *; }
+-keep class io.ktor.serialization.kotlinx.** { *; }
+-dontwarn io.ktor.**
+
+# QuickJS (JavaScript for stream deciphering) calls back into Kotlin from native code.
+-keep class com.dokar.quickjs.** { *; }
+-dontwarn com.dokar.quickjs.**
+
+# PO token WebView bridge: methods called from JavaScript.
+-keepclassmembers class * { @android.webkit.JavascriptInterface <methods>; }
+-keep class app.counstar.playback.potoken.** { *; }
+
+-dontwarn org.slf4j.**
+-dontwarn javax.annotation.**
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**

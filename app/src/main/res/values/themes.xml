@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.Counstar" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/counstar_background</item>
+    </style>
+    <color name="counstar_background">#111318</color>
+    <color name="counstar_icon_background">#0E1A2E</color>
+</resources>
