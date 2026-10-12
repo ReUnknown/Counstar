@@ -58,6 +58,7 @@ import app.counstar.data.SessionRepository
 import app.counstar.data.Updater
 import app.counstar.playback.CounstarPlayer
 import app.counstar.ui.components.BackdropBlurBand
+import app.counstar.ui.components.FROSTED_TINT
 import app.counstar.ui.components.backdropSource
 import app.counstar.ui.components.rememberBackdrop
 import app.counstar.ui.home.FeedScreen
@@ -86,9 +87,6 @@ fun CounstarApp() {
     UpdatePrompt()
 }
 
-/** How much glass tint goes over the blurred content under the bars. */
-private const val BAR_TINT = 0.74f
-
 @Composable
 private fun Shell(session: Session) {
     var fullscreen by remember { mutableStateOf(false) }
@@ -113,7 +111,7 @@ private fun Shell(session: Session) {
     val systemNav = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val bottomBar = BottomBarHeight + systemNav
     val showMini = CounstarPlayer.current != null && !Nav.watchOpen
-    val bottom: Dp = bottomBar + if (showMini) 141.dp else 16.dp
+    val bottom: Dp = bottomBar + if (showMini) 80.dp else 16.dp
     val overlay = Nav.searchOpen || Nav.notificationsOpen
 
     // The top bar slides away as you scroll down and comes back as soon as you scroll up.
@@ -155,25 +153,25 @@ private fun Shell(session: Session) {
             if (Nav.notificationsOpen) NotificationsScreen(bottomPadding = bottom)
         }
 
-        // Top: acrylic behind the status bar and the top bar (as much of it as is showing).
+        // Top: the status bar is plain (only the watch page lets the video's glow through it);
+        // the top bar under it is frosted glass, as much of it as is showing.
         if (!overlay) {
-            val visible = statusBar + with(density) { (barPx + barOffset).toDp() }
-            Box(Modifier.fillMaxWidth().height(visible).clipToBounds()) {
-                BackdropBlurBand(backdrop, screenHeight, atBottom = false, modifier = Modifier.matchParentSize())
-                Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surface.copy(alpha = BAR_TINT)))
-                Column(Modifier.padding(top = statusBar).offset { IntOffset(0, barOffset.roundToInt()) }) {
+            val barVisible = with(density) { (barPx + barOffset).toDp() }
+            Box(Modifier.padding(top = statusBar).fillMaxWidth().height(barVisible).clipToBounds()) {
+                BackdropBlurBand(backdrop, screenHeight, atBottom = false, modifier = Modifier.fillMaxWidth().height(barVisible + statusBar).offset(y = -statusBar))
+                Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surface.copy(alpha = FROSTED_TINT)))
+                Column(Modifier.offset { IntOffset(0, barOffset.roundToInt()) }) {
                     TopBar(Nav.tab)
                     if (chips.isNotEmpty()) HomeChips(chips)
                 }
             }
-        } else {
-            BackdropBlurBand(backdrop, screenHeight, atBottom = false, modifier = Modifier.fillMaxWidth().height(statusBar))
         }
+        Box(Modifier.fillMaxWidth().height(statusBar).background(MaterialTheme.colorScheme.background))
 
-        // Bottom: the bar is acrylic too, all the way down behind the gesture area.
+        // Bottom: frosted glass too, all the way down behind the gesture area.
         Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(bottomBar)) {
             BackdropBlurBand(backdrop, screenHeight, atBottom = true, modifier = Modifier.matchParentSize())
-            Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surface.copy(alpha = BAR_TINT)))
+            Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surface.copy(alpha = FROSTED_TINT)))
             BottomBar(session, systemNav)
         }
 
@@ -181,7 +179,7 @@ private fun Shell(session: Session) {
             showMini,
             enter = fadeIn(tween(220)),
             exit = fadeOut(tween(120)),
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = bottomBar + 12.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(start = 8.dp, end = 8.dp, bottom = bottomBar + 8.dp),
         ) { MiniPlayer() }
 
         AnimatedVisibility(

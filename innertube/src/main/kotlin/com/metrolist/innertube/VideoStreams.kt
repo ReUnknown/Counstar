@@ -11,7 +11,9 @@ import com.metrolist.innertubex.extraction.selectBestAudioFormat
 import com.metrolist.innertubex.extraction.selectBestVideoFormat
 import com.metrolist.innertubex.models.YouTubeClient
 import com.metrolist.innertubex.models.response.PlayerResponse
-import io.ktor.client.call.body
+import io.ktor.client.statement.bodyAsText
+import kotlinx.serialization.json.Json
+import org.json.JSONObject
 import kotlinx.coroutines.CancellationException
 
 /**
@@ -30,7 +32,11 @@ object VideoStreams {
         val height: Int?,
         val headers: Map<String, String>,
         val client: String,
+        /** YouTube's storyboard spec: the little preview frames shown while scrubbing. */
+        val storyboardSpec: String?,
     )
+
+    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     /** Clients to try, in order. The embedded player needs no PO token; the others do. */
     private val clients = listOf(YouTubeClient.WEB_EMBEDDED_PLAYER, YouTubeClient.TVHTML5_SIMPLY, YouTubeClient.WEB)
@@ -69,7 +75,7 @@ object VideoStreams {
                     log("skip ${client.clientName}: no PO token")
                     continue
                 }
-                val response = innerTube.player(
+                val text = innerTube.player(
                     client = client,
                     videoId = videoId,
                     playlistId = null,
@@ -77,7 +83,14 @@ object VideoStreams {
                     poToken = token?.playerRequestToken,
                     requestVisitorData = visitorData.ifBlank { null },
                     encryptedHostFlags = config.encryptedHostFlags.takeIf { client.isEmbedded },
-                ).body<PlayerResponse>()
+                ).bodyAsText()
+                val storyboard = runCatching {
+                    JSONObject(text).optJSONObject("storyboards")
+                        ?.optJSONObject("playerStoryboardSpecRenderer")
+                        ?.optString("spec")
+                        ?.takeIf { it.isNotBlank() }
+                }.getOrNull()
+                val response = json.decodeFromString<PlayerResponse>(text)
                 if (response.playabilityStatus.status != "OK") {
                     lastProblem = response.playabilityStatus.reason ?: response.playabilityStatus.status
                     log("${client.clientName}: ${response.playabilityStatus.status}")
@@ -113,6 +126,7 @@ object VideoStreams {
                     height = video.height,
                     headers = headersFor(client),
                     client = client.clientName,
+                    storyboardSpec = storyboard,
                 )
             } catch (e: CancellationException) {
                 throw e

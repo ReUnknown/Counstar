@@ -3,17 +3,24 @@ package app.counstar.data
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.metrolist.innertube.WebApi
 import com.metrolist.innertube.YouTube
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * A list of videos that loads a page at a time: the home feed, subscriptions, history, search.
- * [fetch] gets one page's JSON: the first page for a null token, else the page for that token.
+ * A list of videos that loads a page at a time: the home feed, subscriptions, history, search,
+ * Up next. Loading runs in the feed's own scope, so scrolling (or leaving the screen) never
+ * cancels a page halfway and leaves it stuck "loading".
  */
-class Feed(private val fetch: suspend (continuation: String?) -> Result<String>) {
+class Feed(
+    private val first: suspend () -> Result<String>,
+    private val more: suspend (token: String) -> Result<String>,
+) {
     var items by mutableStateOf<List<VideoItem>>(emptyList())
         private set
     var loading by mutableStateOf(false)
@@ -26,50 +33,78 @@ class Feed(private val fetch: suspend (continuation: String?) -> Result<String>)
     var chips by mutableStateOf<List<Chip>>(emptyList())
         private set
     private var continuation: String? = null
-    private val lock = Mutex()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var job: Job? = null
 
     val canLoadMore: Boolean get() = continuation != null && !loading && error == null
 
     /** Loads the first page, unless it's already here (or [force]). */
-    suspend fun load(force: Boolean = false) = lock.withLock {
-        if (loadedOnce && !force) return@withLock
+    fun load(force: Boolean = false) {
+        if ((loadedOnce || loading) && !force) return
+        job?.cancel()
         loading = true
         error = null
-        fetchPage(null)
-            .onSuccess { page ->
-                items = page.items
-                continuation = page.continuation
-                if (page.chips.isNotEmpty()) chips = page.chips
-                loadedOnce = true
+        job = scope.launch {
+            try {
+                parse { first() }
+                    .onSuccess { page ->
+                        items = page.items
+                        continuation = page.continuation
+                        if (page.chips.isNotEmpty()) chips = page.chips
+                        loadedOnce = true
+                    }
+                    .onFailure { error = "Couldn't load videos. Check your connection and try again." }
+            } finally {
+                loading = false
             }
-            .onFailure { error = "Couldn't load videos. Check your connection and try again." }
-        loading = false
+        }
     }
 
-    suspend fun loadMore() = lock.withLock {
-        val token = continuation ?: return@withLock
-        if (loading) return@withLock
+    /** Loads the next page, if there is one and nothing is loading. */
+    fun loadMore() {
+        val token = continuation ?: return
+        if (loading) return
         loading = true
-        fetchPage(token)
-            .onSuccess { page ->
-                val seen = items.mapTo(HashSet()) { it.id }
-                items = items + page.items.filter { it.id !in seen }
-                continuation = page.continuation?.takeIf { it != token && page.items.isNotEmpty() }
+        job = scope.launch {
+            try {
+                parse { more(token) }
+                    .onSuccess { page ->
+                        val seen = items.mapTo(HashSet()) { it.id }
+                        val fresh = page.items.filter { it.id !in seen }
+                        items = items + fresh
+                        continuation = page.continuation?.takeIf { it != token && fresh.isNotEmpty() }
+                    }
+                    .onFailure { continuation = null }
+            } finally {
+                loading = false
             }
-            .onFailure { continuation = null }
-        loading = false
+        }
     }
 
-    private suspend fun fetchPage(token: String?): Result<FeedPage> = withContext(Dispatchers.IO) {
-        fetch(token).mapCatching { YouTubeParser.feed(it) }
+    private suspend fun parse(fetch: suspend () -> Result<String>): Result<FeedPage> = withContext(Dispatchers.IO) {
+        fetch().mapCatching { YouTubeParser.feed(it) }
+    }
+
+    companion object {
+        fun browse(id: String) = Feed({ YouTube.rawBrowse(browseId = id) }, { WebApi.browseContinuation(it) })
+
+        /** A feed that starts from a continuation token (a chip's), e.g. a home or Up next filter. */
+        fun browseFrom(token: String) = Feed({ WebApi.browseContinuation(token) }, { WebApi.browseContinuation(it) })
+        fun nextFrom(token: String) = Feed({ WebApi.nextContinuation(token) }, { WebApi.nextContinuation(it) })
+
+        /** A channel's videos tab, newest first. */
+        fun channelVideos(channelId: String) = Feed({ YouTube.rawBrowse(browseId = channelId, params = "EgZ2aWRlb3PyBgQKAjoA") }, { WebApi.browseContinuation(it) })
+
+        /** Up next for a video, starting from the watch page JSON already fetched. */
+        fun upNext(watchJson: String) = Feed({ Result.success(watchJson) }, { WebApi.nextContinuation(it) })
     }
 }
 
 /** The account's feeds, kept while the app runs so switching tabs doesn't reload them. */
 object Feeds {
-    var home = homeFeed(); private set
-    var subscriptions = subscriptionsFeed(); private set
-    var history = historyFeed(); private set
+    var home = Feed.browse("FEwhat_to_watch"); private set
+    var subscriptions = Feed.browse("FEsubscriptions"); private set
+    var history = Feed.browse("FEhistory"); private set
 
     /** The home chip that's selected (null: the first one, "All"), and its feed. */
     var homeChip by mutableStateOf<Chip?>(null); private set
@@ -83,27 +118,17 @@ object Feeds {
             return
         }
         homeChip = chip
-        homeChipFeed = Feed { next -> YouTube.rawBrowse(continuation = next ?: token) }
+        homeChipFeed = Feed.browseFrom(token)
     }
 
-    fun search(query: String) = Feed { token ->
-        if (token == null) YouTube.rawSearch(query = query) else YouTube.rawSearch(continuation = token)
-    }
+    fun search(query: String) = Feed({ YouTube.rawSearch(query = query) }, { WebApi.searchContinuation(it) })
 
     /** Forget everything (signing out). */
     fun clear() {
-        home = homeFeed()
-        subscriptions = subscriptionsFeed()
-        history = historyFeed()
+        home = Feed.browse("FEwhat_to_watch")
+        subscriptions = Feed.browse("FEsubscriptions")
+        history = Feed.browse("FEhistory")
         homeChip = null
         homeChipFeed = null
     }
-
-    private fun browse(id: String) = Feed { token ->
-        if (token == null) YouTube.rawBrowse(browseId = id) else YouTube.rawBrowse(continuation = token)
-    }
-
-    private fun homeFeed() = browse("FEwhat_to_watch")
-    private fun subscriptionsFeed() = browse("FEsubscriptions")
-    private fun historyFeed() = browse("FEhistory")
 }

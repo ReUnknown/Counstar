@@ -95,18 +95,20 @@ fun Thumbnail(item: VideoItem, modifier: Modifier = Modifier, corner: Dp = 28.dp
     }
 }
 
-/** The full-width card YouTube uses in every feed: thumbnail, then avatar, title and byline. */
+/**
+ * The card YouTube uses in every feed: the thumbnail edge to edge (no rounding, like the app),
+ * then avatar, title and byline.
+ */
 @Composable
 fun VideoCard(item: VideoItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Column(
         modifier
             .fillMaxWidth()
-            .pressable(RoundedCornerShape(28.dp), pressedScale = 0.97f, clipAndRipple = false, onClick = onClick)
-            .padding(horizontal = 12.dp),
+            .pressable(RoundedCornerShape(0.dp), pressedScale = 0.98f, clipAndRipple = false, onClick = onClick),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Thumbnail(item, Modifier.fillMaxWidth())
-        Row(Modifier.padding(start = 4.dp, end = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Thumbnail(item, Modifier.fillMaxWidth(), corner = 0.dp)
+        Row(Modifier.padding(start = 12.dp, end = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Avatar(item.channelAvatar, 38.dp, ring = if (item.isLive) YouTubeRed else null)
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(

@@ -50,6 +50,9 @@ object CounstarPlayer {
         private set
     var error by mutableStateOf<String?>(null)
         private set
+    /** Preview frames for scrubbing, when YouTube has them. */
+    var storyboard by mutableStateOf<Storyboard?>(null)
+        private set
 
     private val http by lazy {
         OkHttpClient.Builder()
@@ -114,6 +117,7 @@ object CounstarPlayer {
         player.stop()
         player.clearMediaItems()
         current = null
+        storyboard = null
         loading = false
         error = null
     }
@@ -121,6 +125,7 @@ object CounstarPlayer {
     private fun load(item: VideoItem, startAt: Long, isRetry: Boolean) {
         loadJob?.cancel()
         if (!isRetry) retried = false
+        if (current?.id != item.id) storyboard = null
         current = item
         error = null
         loading = true
@@ -129,6 +134,7 @@ object CounstarPlayer {
             val stream = withContext(Dispatchers.IO) { StreamResolver.resolve(item.id) }
             stream
                 .onSuccess {
+                    storyboard = Storyboard.parse(it.storyboardSpec)
                     player.setMediaSource(mediaSource(it), startAt)
                     player.prepare()
                     player.play()

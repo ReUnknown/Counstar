@@ -53,9 +53,20 @@ data class WatchInfo(
     val subscribers: String?,
     val subscribed: Boolean,
     val likes: String?,
+    /** The exact like count, when YouTube gives it, so liking can update it. */
+    val likeCount: Long?,
     val liked: Boolean,
+    val disliked: Boolean,
+    /** The bell's choices (all / personalized / none) for a channel you're subscribed to. */
+    val bellOptions: List<BellOption>,
+    /** "Most replayed" intensities across the video, 0..1, or empty. */
+    val heatmap: List<Float>,
     val related: List<VideoItem>,
 )
+
+data class BellOption(val title: String, val params: String, val selected: Boolean, val kind: Kind) {
+    enum class Kind { All, Personalized, None }
+}
 
 /**
  * Reads YouTube's (WEB client) JSON. YouTube mixes two generations of item formats
@@ -104,6 +115,9 @@ object YouTubeParser {
         val likeButton = findFirst(primary, "likeButtonViewModel")
         val likeLabel = likeButton?.let { findFirst(it, "buttonViewModel") }?.optString("title")?.takeIf { it.isNotBlank() }
         val liked = likeButton?.let { findFirst(it, "toggleButtonViewModel") }?.optBoolean("isToggled") ?: false
+        val disliked = findFirst(findFirst(primary, "dislikeButtonViewModel"), "toggleButtonViewModel")?.optBoolean("isToggled") ?: false
+        val likeCount = likeButton?.toString()?.let { Regex("along with ([\\d,]+)").find(it)?.groupValues?.get(1) }
+            ?.replace(",", "")?.toLongOrNull()
         val subscribeButton = findFirst(secondary?.optJSONObject("subscribeButton"), "subscribeButtonRenderer")
         val subscribedState = findFirst(secondary?.optJSONObject("subscribeButton"), "subscribeButtonViewModel")
         val related = results?.optJSONObject("secondaryResults")?.let { feed(it.toString()).items }.orEmpty()
@@ -123,7 +137,11 @@ object YouTubeParser {
                 ?: findFirst(subscribedState, "subscribeButtonViewModel")?.optBoolean("isSubscribed")
                 ?: false,
             likes = likeLabel,
+            likeCount = likeCount,
             liked = liked,
+            disliked = disliked,
+            bellOptions = bellOptions(secondary?.optJSONObject("subscribeButton")),
+            heatmap = heatmap(root),
             related = related,
         )
     }
@@ -143,6 +161,42 @@ object YouTubeParser {
             }
         }
         return list
+    }
+
+    /** The bell menu: old-style menuServiceItemRenderers or new listItemViewModels. */
+    private fun bellOptions(node: JSONObject?): List<BellOption> {
+        node ?: return emptyList()
+        val options = mutableListOf<BellOption>()
+        fun add(title: String?, holder: JSONObject, selected: Boolean) {
+            val params = findFirst(holder, "modifyChannelNotificationPreferenceEndpoint")?.optString("params")?.takeIf { it.isNotBlank() } ?: return
+            val raw = holder.toString()
+            val kind = when {
+                "NOTIFICATIONS_ACTIVE" in raw -> BellOption.Kind.All
+                "NOTIFICATIONS_OFF" in raw -> BellOption.Kind.None
+                else -> BellOption.Kind.Personalized
+            }
+            options += BellOption(title ?: kind.name, params, selected, kind)
+        }
+        walk(node) { key, value ->
+            if (value !is JSONObject) return@walk
+            when (key) {
+                "menuServiceItemRenderer" -> add(text(value.optJSONObject("text")), value, value.optBoolean("isSelected"))
+                "listItemViewModel" -> add(value.optJSONObject("title")?.optString("content"), value, value.optBoolean("isSelected"))
+            }
+        }
+        return options.distinctBy { it.params }
+    }
+
+    private fun heatmap(root: JSONObject): List<Float> {
+        var markers: JSONArray? = null
+        walk(root) { key, value ->
+            if (markers == null && key == "macroMarkersListEntity" && value is JSONObject) {
+                val list = value.optJSONObject("markersList")
+                if (list?.optString("markerType")?.contains("HEATMAP") != false) markers = list?.optJSONArray("markers")
+            }
+        }
+        val m = markers ?: return emptyList()
+        return (0 until m.length()).mapNotNull { m.optJSONObject(it)?.optDouble("intensityScoreNormalized")?.toFloat()?.takeIf { v -> !v.isNaN() } }
     }
 
     private fun videoRenderer(v: JSONObject): VideoItem? {

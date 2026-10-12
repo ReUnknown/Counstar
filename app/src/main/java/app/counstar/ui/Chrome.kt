@@ -1,6 +1,5 @@
 package app.counstar.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,7 +39,7 @@ import app.counstar.ui.home.CounstarLogo
 
 val TopBarHeight = 56.dp
 val ChipsHeight = 48.dp
-val BottomBarHeight = 56.dp
+val BottomBarHeight = 50.dp
 
 /** The top bar: Counstar on Home, the tab's name elsewhere, with notifications and search. */
 @Composable
@@ -134,25 +133,17 @@ private fun BarItem(label: String, selected: Boolean, modifier: Modifier, onClic
     Column(
         modifier
             .height(BottomBarHeight)
-            .pressable(RoundedCornerShape(16.dp), pressedScale = 0.9f, clipAndRipple = false, onClick = onClick),
+            .pressable(RoundedCornerShape(16.dp), pressedScale = 0.88f, clipAndRipple = false, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Box(
-            Modifier
-                .size(width = 52.dp, height = 28.dp)
-                .background(
-                    if (selected) MaterialTheme.colorScheme.secondaryContainer else androidx.compose.ui.graphics.Color.Transparent,
-                    RoundedCornerShape(14.dp),
-                ),
-            contentAlignment = Alignment.Center,
-        ) { icon(selected) }
+        icon(selected)
         Text(
             label,
             fontSize = 10.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 2.dp),
+            modifier = Modifier.padding(top = 3.dp),
         )
     }
 }

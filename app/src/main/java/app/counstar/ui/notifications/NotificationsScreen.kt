@@ -48,7 +48,7 @@ import app.counstar.ui.Nav
 import app.counstar.ui.components.Avatar
 import app.counstar.ui.components.pressable
 import coil3.compose.AsyncImage
-import com.metrolist.innertube.Notifications
+import com.metrolist.innertube.WebApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -59,7 +59,7 @@ fun NotificationsScreen(bottomPadding: Dp) {
     var items by remember { mutableStateOf<List<Notification>?>(null) }
     var failed by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) { Notifications.raw().mapCatching(YouTubeParser::notifications) }
+        withContext(Dispatchers.IO) { WebApi.notifications().mapCatching(YouTubeParser::notifications) }
             .onSuccess { items = it }
             .onFailure { failed = true }
     }

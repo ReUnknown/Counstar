@@ -40,6 +40,7 @@ class VideoStream(
     /** Bytes per request when the stream only answers bounded ranges, else 0. */
     val chunkSize: Long,
     val height: Int?,
+    val storyboardSpec: String? = null,
 ) {
     /** An HLS manifest: picture and sound together, which the player streams as one. */
     val isHls: Boolean get() = videoUrl == audioUrl || "/manifest/hls" in videoUrl || ".m3u8" in videoUrl
@@ -101,6 +102,7 @@ object StreamResolver {
             audioLength = stream.audioLength,
             chunkSize = 0L,
             height = stream.height,
+            storyboardSpec = stream.storyboardSpec,
         )
     }
 

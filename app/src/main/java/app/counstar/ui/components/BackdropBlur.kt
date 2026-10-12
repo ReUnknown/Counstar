@@ -239,8 +239,11 @@ fun ProgressiveBackdropBlur(
     }
 }
 
+/** How much of the surface color lies over frosted glass: enough to read on, light enough to see through. */
+const val FROSTED_TINT = 0.5f
+
 /**
- * Acrylic, like YouTube's bars: the content underneath, evenly blurred, in a band along the top or
+ * Frosted glass, like YouTube's bars: the content underneath, evenly blurred, in a band along the top or
  * bottom edge of a [fullHeight]-tall screen. The band itself is this composable's size.
  */
 @Composable
@@ -249,7 +252,7 @@ fun BackdropBlurBand(
     fullHeight: Dp,
     atBottom: Boolean,
     modifier: Modifier = Modifier,
-    radius: Dp = 28.dp,
+    radius: Dp = 48.dp,
 ) {
     Box(modifier.clipToBounds()) {
         LowResBlur(
