@@ -4,7 +4,9 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.draggable
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -83,6 +85,18 @@ fun MiniPlayer(modifier: Modifier = Modifier) {
                     }
                 },
             )
+            // Swipe up to go back to the video.
+            .pointerInput(Unit) {
+                var total = 0f
+                detectVerticalDragGestures(
+                    onDragStart = { total = 0f },
+                    onDragEnd = { if (total < -40.dp.toPx()) Nav.watchOpen = true },
+                    onVerticalDrag = { change, dy ->
+                        change.consume()
+                        total += dy
+                    },
+                )
+            }
             .clickable { Nav.watchOpen = true },
     ) {
         Row(

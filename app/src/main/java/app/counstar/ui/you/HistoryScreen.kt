@@ -58,7 +58,7 @@ fun HistoryScreen(bottomPadding: Dp) {
     Page("History", onBack = { Nav.historyOpen = false }) {
         PullToRefreshBox(
             isRefreshing = refreshing,
-            onRefresh = { scope.launch { refreshing = true; feed.load(force = true); refreshing = false } },
+            onRefresh = { scope.launch { refreshing = true; feed.refresh(); refreshing = false } },
             modifier = Modifier.fillMaxSize(),
         ) {
             VideoList(feed, bottomPadding, empty = "Videos you watch show up here.", dated = true)

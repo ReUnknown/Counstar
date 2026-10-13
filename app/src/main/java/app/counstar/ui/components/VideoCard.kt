@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import android.content.Intent
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material.icons.rounded.MoreVert
@@ -151,12 +152,14 @@ fun VideoCard(item: VideoItem, onClick: () -> Unit, modifier: Modifier = Modifie
     }
 }
 
-/** ⋮ on a card: save it for later, or share it. */
+/** ⋮ on a card: save it for later or to a playlist, or share it. */
 @Composable
 private fun CardMenu(item: VideoItem) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var open by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    if (saving) SaveToPlaylistSheet(item.id) { saving = false }
     Box {
         IconButton(onClick = { open = true }, modifier = Modifier.size(40.dp)) {
             Icon(Icons.Rounded.MoreVert, contentDescription = "More options", modifier = Modifier.size(20.dp))
@@ -167,7 +170,19 @@ private fun CardMenu(item: VideoItem) {
                 leadingIcon = { Icon(Icons.Outlined.WatchLater, null) },
                 onClick = {
                     open = false
-                    scope.launch { WebApi.watchLater(item.id, add = true) }
+                    scope.launch {
+                        WebApi.watchLater(item.id, add = true)
+                            .onSuccess { android.widget.Toast.makeText(context, "Saved to Watch later", android.widget.Toast.LENGTH_SHORT).show() }
+                            .onFailure { android.widget.Toast.makeText(context, "Couldn't save: ${it.message}", android.widget.Toast.LENGTH_SHORT).show() }
+                    }
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Save to playlist") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, null) },
+                onClick = {
+                    open = false
+                    saving = true
                 },
             )
             DropdownMenuItem(

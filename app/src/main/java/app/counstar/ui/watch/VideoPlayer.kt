@@ -1,6 +1,20 @@
 package app.counstar.ui.watch
 
 import android.view.TextureView
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.material.icons.outlined.ClosedCaption
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.rounded.ClosedCaption
+import androidx.compose.material.icons.rounded.FastForward
+import androidx.compose.material.icons.rounded.FastRewind
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import app.counstar.data.Chapter
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateDpAsState
@@ -206,9 +220,10 @@ fun AmbientLight(fallback: String?, modifier: Modifier = Modifier, strength: Flo
 }
 
 /**
- * The video with YouTube's controls: tap to show them, play/pause in the middle, skip 10 seconds
- * either side, and the seek bar along the bottom. In full screen everything (controls included)
- * sits on the picture itself, with the video's glow in the bars around it.
+ * The video with YouTube's controls. Tap to show them; double-tap either side to skip 10
+ * seconds; hold for 2x while your finger stays down. Swipe down to leave full screen, or (not
+ * in full screen) to minimize: [onSwipe] follows the finger and [onSwipeEnd] says how far it got.
+ * In full screen everything (controls included) sits on the picture itself, the title on top.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -218,22 +233,106 @@ fun VideoPlayer(
     onMinimize: (() -> Unit)?,
     modifier: Modifier = Modifier,
     heatmap: List<Float> = emptyList(),
+    chapters: List<Chapter> = emptyList(),
+    title: String? = null,
+    onSwipe: (Float) -> Unit = {},
+    onSwipeEnd: (Float) -> Unit = {},
 ) {
     val player = CounstarPlayer.player
     val state = rememberPlaybackState(player)
+    val context = LocalContext.current
+    val density = LocalDensity.current
     var controls by remember { mutableStateOf(true) }
     var scrubAt by remember { mutableStateOf<Long?>(null) }
+    var settingsOpen by remember { mutableStateOf(false) }
+    var captionsOpen by remember { mutableStateOf(false) }
+    var holding by remember { mutableStateOf(false) }
+    // Double-tap skips: which side, and how many seconds so far in this burst.
+    var skipSide by remember { mutableIntStateOf(0) }
+    var skipSeconds by remember { mutableIntStateOf(0) }
+    var skipBurst by remember { mutableIntStateOf(0) }
+    LaunchedEffect(skipBurst) {
+        if (skipBurst == 0) return@LaunchedEffect
+        delay(700)
+        skipSide = 0
+        skipSeconds = 0
+    }
     LaunchedEffect(controls, state.playing, scrubAt) {
         if (controls && state.playing && scrubAt == null) {
             delay(3_000)
             controls = false
         }
     }
+    fun toggleCaptions() {
+        val tracks = CounstarPlayer.captionTracks
+        when {
+            tracks.isEmpty() -> Toast.makeText(context, "This video has no captions", Toast.LENGTH_SHORT).show()
+            CounstarPlayer.caption != null -> CounstarPlayer.showCaptions(null)
+            else -> CounstarPlayer.showCaptions(
+                tracks.firstOrNull { it.language.startsWith("en") && !it.auto } ?: tracks.firstOrNull { !it.auto } ?: tracks.first(),
+            )
+        }
+    }
     Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
         if (fullscreen) AmbientLight(CounstarPlayer.current?.thumbnail, Modifier.fillMaxSize(), strength = 0.45f, blur = 48.dp)
         Box(
             (if (fullscreen) Modifier.fillMaxHeight().aspectRatio(state.ratio, matchHeightConstraintsFirst = true) else Modifier.fillMaxSize())
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { controls = !controls },
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = { controls = !controls },
+                        onDoubleTap = { at ->
+                            val side = when {
+                                at.x < size.width * 0.4f -> -1
+                                at.x > size.width * 0.6f -> 1
+                                else -> 0
+                            }
+                            if (side == 0) {
+                                if (player.isPlaying) player.pause() else player.play()
+                            } else {
+                                player.seekTo((player.currentPosition + side * 10_000L).coerceIn(0L, player.duration.coerceAtLeast(0L)))
+                                if (skipSide != side) skipSeconds = 0
+                                skipSide = side
+                                skipSeconds += 10
+                                skipBurst++
+                            }
+                        },
+                        onLongPress = {
+                            holding = true
+                            controls = false
+                            CounstarPlayer.holdFast(true)
+                        },
+                        onPress = {
+                            tryAwaitRelease()
+                            if (holding) {
+                                holding = false
+                                CounstarPlayer.holdFast(false)
+                            }
+                        },
+                    )
+                }
+                .pointerInput(fullscreen) {
+                    var total = 0f
+                    detectVerticalDragGestures(
+                        onDragStart = { total = 0f },
+                        onDragEnd = {
+                            if (fullscreen) {
+                                if (total > with(density) { 90.dp.toPx() }) onToggleFullscreen()
+                            } else {
+                                onSwipeEnd(total)
+                            }
+                            total = 0f
+                        },
+                        onDragCancel = {
+                            if (!fullscreen) onSwipeEnd(0f)
+                            total = 0f
+                        },
+                        onVerticalDrag = { change, dy ->
+                            change.consume()
+                            total = (total + dy).coerceAtLeast(0f)
+                            if (!fullscreen) onSwipe(total)
+                        },
+                    )
+                },
         ) {
             VideoSurface(Modifier.fillMaxSize(), sampleAmbient = true)
 
@@ -244,6 +343,8 @@ fun VideoPlayer(
                 StoryboardFrame(storyboard, target, state.duration.coerceAtLeast(1L))
             }
 
+            Captions(state.position, fullscreen, lifted = controls || target != null)
+
             val loading = CounstarPlayer.loading || state.buffering
             if (loading && CounstarPlayer.error == null && target == null) {
                 LoadingIndicator(Modifier.align(Alignment.Center).size(64.dp), color = Color.White)
@@ -252,14 +353,67 @@ fun VideoPlayer(
                 Text(it, color = Color.White, modifier = Modifier.align(Alignment.Center).padding(24.dp))
             }
 
+            SkipIndicator(skipSide, skipSeconds)
+            if (holding) {
+                Row(
+                    Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 14.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text("2x", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Icon(Icons.Rounded.FastForward, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                }
+            }
+
             AnimatedVisibility(controls || target != null, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = if (target != null) 0.1f else 0.35f))) {
                     if (target == null) {
-                        Row(Modifier.fillMaxWidth().padding(4.dp)) {
-                            if (onMinimize != null) {
-                                IconButton(onClick = onMinimize) {
-                                    Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Minimize", tint = Color.White)
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = if (fullscreen) 8.dp else 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (fullscreen) {
+                                IconButton(onClick = onToggleFullscreen) {
+                                    Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Exit full screen", tint = Color.White)
                                 }
+                                Text(
+                                    title.orEmpty(),
+                                    color = Color.White,
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f).padding(start = 4.dp, end = 8.dp),
+                                )
+                            } else {
+                                if (onMinimize != null) {
+                                    IconButton(onClick = onMinimize) {
+                                        Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Minimize", tint = Color.White)
+                                    }
+                                }
+                                Spacer(Modifier.weight(1f))
+                            }
+                            // Captions: tap to turn on or off, hold for languages.
+                            Box(
+                                Modifier
+                                    .size(44.dp)
+                                    .clip(CircleShape)
+                                    .combinedClickable(onLongClick = { captionsOpen = true }, onClick = ::toggleCaptions),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    if (CounstarPlayer.caption != null) Icons.Rounded.ClosedCaption else Icons.Outlined.ClosedCaption,
+                                    contentDescription = "Captions",
+                                    tint = if (CounstarPlayer.captionTracks.isEmpty()) Color.White.copy(alpha = 0.45f) else Color.White,
+                                )
+                            }
+                            IconButton(onClick = { settingsOpen = true }) {
+                                Icon(Icons.Outlined.Settings, contentDescription = "Video settings", tint = Color.White)
                             }
                         }
                         if (!loading) {
@@ -303,6 +457,16 @@ fun VideoPlayer(
                                     fontWeight = FontWeight.SemiBold,
                                     modifier = Modifier.padding(start = 6.dp),
                                 )
+                                chapterAt(chapters, state.position)?.let {
+                                    Text(
+                                        "  •  ${it.title}",
+                                        color = Color.White.copy(alpha = 0.85f),
+                                        fontSize = 12.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false),
+                                    )
+                                }
                                 Spacer(Modifier.weight(1f))
                                 IconButton(onClick = onToggleFullscreen) {
                                     Icon(
@@ -313,9 +477,59 @@ fun VideoPlayer(
                                 }
                             }
                         }
-                        SeekBar(state, heatmap, onScrub = { scrubAt = it })
+                        SeekBar(state, heatmap, chapters, onScrub = { scrubAt = it })
                     }
                 }
+            }
+        }
+    }
+    if (settingsOpen) VideoSettingsSheet(onDismiss = { settingsOpen = false }, onCaptions = { settingsOpen = false; captionsOpen = true })
+    if (captionsOpen) CaptionsSheet(onDismiss = { captionsOpen = false })
+}
+
+/** The chapter playing at [positionMs], if the video has chapters. */
+fun chapterAt(chapters: List<Chapter>, positionMs: Long): Chapter? = chapters.lastOrNull { it.startMs <= positionMs }
+
+/** The caption line for now, over the bottom of the picture (above the controls when they show). */
+@Composable
+private fun BoxScope.Captions(positionMs: Long, fullscreen: Boolean, lifted: Boolean) {
+    if (CounstarPlayer.caption == null) return
+    val cue = CounstarPlayer.cues.lastOrNull { it.startMs <= positionMs && positionMs < it.endMs } ?: return
+    val lift by animateDpAsState(if (lifted) 64.dp else 12.dp, label = "captions")
+    Text(
+        cue.text,
+        color = Color.White,
+        fontSize = if (fullscreen) 19.sp else 15.sp,
+        lineHeight = if (fullscreen) 24.sp else 19.sp,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = lift, start = 24.dp, end = 24.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color.Black.copy(alpha = 0.7f))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+    )
+}
+
+/** YouTube's double-tap feedback: a soft half-circle on that side, with the seconds skipped. */
+@Composable
+private fun BoxScope.SkipIndicator(side: Int, seconds: Int) {
+    androidx.compose.animation.AnimatedVisibility(
+        visible = side != 0,
+        enter = fadeIn(tween(120)),
+        exit = fadeOut(tween(300)),
+        modifier = Modifier.align(if (side < 0) Alignment.CenterStart else Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(0.38f),
+    ) {
+        val shape = if (side < 0) RoundedCornerShape(topEndPercent = 100, bottomEndPercent = 100) else RoundedCornerShape(topStartPercent = 100, bottomStartPercent = 100)
+        Box(Modifier.fillMaxSize().clip(shape).background(Color.White.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    if (side < 0) Icons.Rounded.FastRewind else Icons.Rounded.FastForward,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(28.dp),
+                )
+                Text("${seconds.coerceAtLeast(10)} seconds", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -323,11 +537,12 @@ fun VideoPlayer(
 
 /**
  * The seek bar: a red line with a line-shaped handle (Material's expressive slider), buffered
- * in gray. Tap to jump or drag along it; while you drag it thickens, the time follows your
- * finger, and the "most replayed" wave rises above it.
+ * in gray, split at chapters. Tap to jump. Drag anywhere along it and the handle moves by as
+ * much as your finger does, from where it was (it doesn't jump to your finger), like YouTube's.
+ * While you drag it thickens, the time and chapter follow, and the "most replayed" wave rises.
  */
 @Composable
-private fun SeekBar(state: PlaybackState, heatmap: List<Float>, onScrub: (Long?) -> Unit) {
+private fun SeekBar(state: PlaybackState, heatmap: List<Float>, chapters: List<Chapter>, onScrub: (Long?) -> Unit) {
     val player = CounstarPlayer.player
     val scope = rememberCoroutineScope()
     var dragging by remember { mutableStateOf(false) }
@@ -339,11 +554,15 @@ private fun SeekBar(state: PlaybackState, heatmap: List<Float>, onScrub: (Long?)
     val buffered = state.buffered.toFloat() / duration
     val track by animateDpAsState(if (dragging) 7.dp else 4.dp, label = "track")
     val handle by animateDpAsState(if (dragging) 26.dp else 18.dp, label = "handle")
+    val breaks = chapters.drop(1).map { it.startMs.toFloat() / duration }
 
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val widthPx = constraints.maxWidth.toFloat()
         Column {
-            if (dragging) ScrubInfo((fraction * duration).toLong(), heatmap, fraction * widthPx, widthPx)
+            if (dragging) {
+                val at = (fraction * duration).toLong()
+                ScrubInfo(at, chapterAt(chapters, at)?.title, heatmap, fraction * widthPx, widthPx)
+            }
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -355,11 +574,12 @@ private fun SeekBar(state: PlaybackState, heatmap: List<Float>, onScrub: (Long?)
                     }
                     .pointerInput(duration) {
                         detectHorizontalDragGestures(
-                            onDragStart = { offset ->
+                            onDragStart = {
                                 resumeAfter = player.isPlaying || player.playWhenReady
                                 player.pause()
+                                // From where the video is, not where the finger landed.
+                                fraction = (player.currentPosition.toFloat() / duration).coerceIn(0f, 1f)
                                 dragging = true
-                                fraction = (offset.x / size.width).coerceIn(0f, 1f)
                                 onScrub((fraction * duration).toLong())
                             },
                             onDragEnd = {
@@ -391,18 +611,28 @@ private fun SeekBar(state: PlaybackState, heatmap: List<Float>, onScrub: (Long?)
                     val r = CornerRadius(h / 2, h / 2)
                     val handleW = 4.dp.toPx()
                     val gap = 3.dp.toPx()
+                    val chapterGap = 2.dp.toPx()
+                    val cuts = breaks.map { it * size.width }
+                    // A stretch of the bar, broken where chapters begin.
+                    fun piece(from: Float, to: Float, color: Color) {
+                        var start = from
+                        for (c in cuts) {
+                            if (c <= start || c >= to) continue
+                            if (c - chapterGap / 2 > start) drawRoundRect(color, Offset(start, y), Size(c - chapterGap / 2 - start, h), r)
+                            start = c + chapterGap / 2
+                        }
+                        if (to > start) drawRoundRect(color, Offset(start, y), Size(to - start, h), r)
+                    }
                     val x = (size.width * shown.coerceIn(0f, 1f)).coerceIn(handleW / 2, size.width - handleW / 2)
                     // Inactive, then buffered, to the right of the handle; played to its left.
                     val restStart = x + handleW / 2 + gap
                     if (restStart < size.width) {
-                        drawRoundRect(Color.White.copy(alpha = 0.28f), Offset(restStart, y), Size(size.width - restStart, h), r)
+                        piece(restStart, size.width, Color.White.copy(alpha = 0.28f))
                         val bufferedEnd = size.width * buffered.coerceIn(0f, 1f)
-                        if (bufferedEnd > restStart) {
-                            drawRoundRect(Color.White.copy(alpha = 0.55f), Offset(restStart, y), Size(bufferedEnd - restStart, h), r)
-                        }
+                        if (bufferedEnd > restStart) piece(restStart, bufferedEnd, Color.White.copy(alpha = 0.55f))
                     }
                     val playedEnd = x - handleW / 2 - gap
-                    if (playedEnd > 0f) drawRoundRect(YouTubeRed, Offset(0f, y), Size(playedEnd, h), r)
+                    if (playedEnd > 0f) piece(0f, playedEnd, YouTubeRed)
                     drawRoundRect(
                         YouTubeRed,
                         Offset(x - handleW / 2, 0f),
@@ -415,13 +645,13 @@ private fun SeekBar(state: PlaybackState, heatmap: List<Float>, onScrub: (Long?)
     }
 }
 
-/** While scrubbing: the time over the handle, and the "most replayed" wave across the bar. */
+/** While scrubbing: the time (and chapter) over the handle, and the "most replayed" wave. */
 @Composable
-private fun ScrubInfo(positionMs: Long, heatmap: List<Float>, anchorX: Float, barWidthPx: Float) {
-    val bubbleWidth = 76.dp
+private fun ScrubInfo(positionMs: Long, chapter: String?, heatmap: List<Float>, anchorX: Float, barWidthPx: Float) {
+    val bubbleWidth = if (chapter != null) 180.dp else 76.dp
     val bubblePx = with(LocalDensity.current) { bubbleWidth.toPx() }
     val left = (anchorX - bubblePx / 2).coerceIn(0f, (barWidthPx - bubblePx).coerceAtLeast(0f))
-    Box(Modifier.fillMaxWidth().height(64.dp)) {
+    Box(Modifier.fillMaxWidth().height(if (chapter != null) 80.dp else 64.dp)) {
         if (heatmap.size > 2) {
             Canvas(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(36.dp)) {
                 val path = Path()
@@ -439,19 +669,18 @@ private fun ScrubInfo(positionMs: Long, heatmap: List<Float>, anchorX: Float, ba
                 drawPath(path, Color.White.copy(alpha = 0.3f))
             }
         }
-        Text(
-            formatTime(positionMs),
-            color = Color.White,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-            modifier = Modifier
+        Column(
+            Modifier
                 .offset { IntOffset(left.roundToInt(), 0) }
                 .width(bubbleWidth)
                 .clip(RoundedCornerShape(12.dp))
                 .background(Color.Black.copy(alpha = 0.6f))
-                .padding(vertical = 4.dp),
-        )
+                .padding(vertical = 4.dp, horizontal = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            chapter?.let { Text(it, color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            Text(formatTime(positionMs), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+        }
     }
 }
 

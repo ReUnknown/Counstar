@@ -60,6 +60,12 @@ class Feed(
         }
     }
 
+    /** Loads the first page again and waits for it (pull to refresh). */
+    suspend fun refresh() {
+        load(force = true)
+        job?.join()
+    }
+
     /** Loads the next page, if there is one and nothing is loading. */
     fun loadMore() {
         val token = continuation ?: return

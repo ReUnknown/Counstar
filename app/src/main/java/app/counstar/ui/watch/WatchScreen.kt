@@ -2,6 +2,11 @@ package app.counstar.ui.watch
 
 import android.content.Intent
 import android.widget.Toast
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.platform.LocalDensity
+import app.counstar.ui.components.SaveToPlaylistSheet
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -128,10 +133,18 @@ fun WatchScreen(fullscreen: Boolean, onToggleFullscreen: () -> Unit) {
             onToggleFullscreen = onToggleFullscreen,
             onMinimize = null,
             heatmap = info?.heatmap.orEmpty(),
+            chapters = info?.chapters.orEmpty(),
+            title = info?.title ?: item.title,
             modifier = Modifier.fillMaxSize(),
         )
         return
     }
+
+    // Swipe down on the video to minimize it: the page follows the finger, and past a point
+    // it lets go into the mini player.
+    val scope = rememberCoroutineScope()
+    val drag = remember { Animatable(0f) }
+    val density = LocalDensity.current
 
     val list = rememberLazyListState()
     var commentsOpen by remember(item.id) { mutableStateOf(false) }
@@ -141,7 +154,19 @@ fun WatchScreen(fullscreen: Boolean, onToggleFullscreen: () -> Unit) {
     }
     val dark = isCounstarDark()
     val page = MaterialTheme.colorScheme.background
-    Box(Modifier.fillMaxSize().background(page)) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                translationY = drag.value
+                val f = (drag.value / size.height).coerceIn(0f, 1f)
+                alpha = 1f - f * 0.6f
+                scaleX = 1f - f * 0.15f
+                scaleY = 1f - f * 0.15f
+                transformOrigin = TransformOrigin(0.5f, 0f)
+            }
+            .background(page),
+    ) {
         // Acrylic glow from the video itself, spilling out under the player and fading into the
         // page. It belongs to the top of the page: scrolling down carries it away with the title.
         // Dimmer in dark mode, so only the video itself is bright.
@@ -170,12 +195,27 @@ fun WatchScreen(fullscreen: Boolean, onToggleFullscreen: () -> Unit) {
             )
         }
         Column(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxWidth().statusBarsPadding())
+            // Above the video: the page's own color, like below it (never the glow).
+            Box(Modifier.fillMaxWidth().background(page).statusBarsPadding())
             VideoPlayer(
                 fullscreen = false,
                 onToggleFullscreen = onToggleFullscreen,
                 onMinimize = { Nav.watchOpen = false },
                 heatmap = info?.heatmap.orEmpty(),
+                chapters = info?.chapters.orEmpty(),
+                title = info?.title ?: item.title,
+                onSwipe = { dy -> scope.launch { drag.snapTo(dy) } },
+                onSwipeEnd = { dy ->
+                    scope.launch {
+                        if (dy > with(density) { 140.dp.toPx() }) {
+                            Nav.watchOpen = false
+                            drag.animateTo(drag.value + with(density) { 200.dp.toPx() }, tween(160))
+                            drag.snapTo(0f)
+                        } else {
+                            drag.animateTo(0f, spring(dampingRatio = 0.7f))
+                        }
+                    }
+                },
                 modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
             )
             Box(Modifier.fillMaxSize()) {
@@ -206,10 +246,10 @@ private fun WatchDetails(
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    var expanded by remember(item.id) { mutableStateOf(false) }
+    var describing by remember(item.id) { mutableStateOf(false) }
+    var saving by remember(item.id) { mutableStateOf(false) }
     var liked by remember(item.id, details) { mutableStateOf(details?.liked ?: false) }
     var disliked by remember(item.id, details) { mutableStateOf(details?.disliked ?: false) }
-    var saved by remember(item.id) { mutableStateOf(false) }
     fun failed(what: String, error: Throwable) {
         Toast.makeText(context, "Couldn't $what: ${error.message}", Toast.LENGTH_SHORT).show()
     }
@@ -284,28 +324,24 @@ private fun WatchDetails(
                     Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp)
-                        .animateContentSize()
-                        .clickable { expanded = !expanded },
+                        .clickable { if (details != null) describing = true },
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Text(
                         details?.title ?: item.title,
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, lineHeight = 25.sp, fontSize = 20.sp),
-                        maxLines = if (expanded) Int.MAX_VALUE else 2,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                     val meta = listOfNotNull(details?.views ?: item.views, details?.published ?: item.published).joinToString(" · ")
                     Text(
                         buildString {
                             append(meta)
-                            if (details?.description != null && !expanded) append("  ...more")
+                            if (details != null) append("  ...more")
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.onSurfaceVariant,
                     )
-                    if (expanded) details?.description?.let {
-                        Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
-                    }
                 }
             }
             item(key = "channel") {
@@ -377,14 +413,9 @@ private fun WatchDetails(
                     }
                     item {
                         Action(
-                            icon = if (saved) Icons.Rounded.Bookmark else Icons.Outlined.BookmarkBorder,
-                            label = if (saved) "Saved" else "Save",
-                            active = saved,
-                        ) {
-                            val want = !saved
-                            saved = want
-                            scope.launch { WebApi.watchLater(item.id, want).onFailure { saved = !want; failed("save that", it) } }
-                        }
+                            icon = Icons.Outlined.BookmarkBorder,
+                            label = "Save",
+                        ) { saving = true }
                     }
                 }
             }
@@ -409,6 +440,9 @@ private fun WatchDetails(
             }
         }
 
+
+        if (describing && details != null) DescriptionSheet(item, details) { describing = false }
+        if (saving) SaveToPlaylistSheet(item.id) { saving = false }
 
         // Once the chips scroll up to the top, they stay there on frosted glass.
         if (chipsStuck) {

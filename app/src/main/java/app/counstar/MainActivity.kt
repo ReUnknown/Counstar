@@ -11,6 +11,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.lifecycleScope
 import app.counstar.data.SessionRepository
+import coil3.ImageLoader
+import coil3.SingletonImageLoader
+import coil3.gif.AnimatedImageDecoder
 import app.counstar.data.Settings
 import app.counstar.playback.CounstarPlayer
 import app.counstar.ui.CounstarApp
@@ -25,6 +28,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         if (BuildConfig.DEBUG && Timber.forest().isEmpty()) Timber.plant(Timber.DebugTree())
         Settings.initialize(this)
+        // Animated images (GIFs in comments) play instead of showing their first frame.
+        SingletonImageLoader.setSafe { context ->
+            ImageLoader.Builder(context).components { add(AnimatedImageDecoder.Factory()) }.build()
+        }
         // The screen never dims or locks while Counstar is open.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         CounstarPlayer.initialize(this)

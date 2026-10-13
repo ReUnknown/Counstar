@@ -36,6 +36,8 @@ object VideoStreams {
         val storyboardSpec: String?,
         /** Where to report a playback, so the video lands in watch history. */
         val statsUrl: String? = null,
+        /** Every height the video comes in (for this phone's codecs), tallest first. */
+        val heights: List<Int> = emptyList(),
     )
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -136,6 +138,7 @@ object VideoStreams {
                     client = client.clientName,
                     storyboardSpec = storyboard,
                     statsUrl = statsUrl,
+                    heights = videoFormats.mapNotNull { it.height }.filter { it >= 144 }.distinct().sortedDescending(),
                 )
             } catch (e: CancellationException) {
                 throw e

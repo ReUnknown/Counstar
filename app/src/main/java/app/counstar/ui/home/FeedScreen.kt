@@ -90,7 +90,8 @@ fun FeedScreen(
         onRefresh = {
             scope.launch {
                 refreshing = true
-                feed.load(force = true)
+                feed.refresh()
+                list.scrollToItem(0)
                 refreshing = false
             }
         },

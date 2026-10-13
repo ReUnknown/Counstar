@@ -57,9 +57,38 @@ data class Comment(
     val undislikeAction: String? = null,
     /** The creator hearted it. */
     val hearted: Boolean = false,
+    /** Links (@mentions, timestamps) and images (emoji, GIFs) laid over parts of [text]. */
+    val runs: List<TextRun> = emptyList(),
+    /** What to send to reply to it (signed in only). */
+    val replyParams: String? = null,
 )
 
-data class CommentsPage(val count: String?, val comments: List<Comment>, val continuation: String?)
+/** Something laid over a stretch of a comment's text, from [start] for [length] characters. */
+sealed interface TextRun {
+    val start: Int
+    val length: Int
+}
+
+/** A tappable stretch: an @mention, a link, or a timestamp ([seekSeconds]). */
+data class LinkRun(override val start: Int, override val length: Int, val seekSeconds: Int?, val url: String?) : TextRun
+
+/** An image in place of text: a custom emoji (small) or a GIF / sticker (large). */
+data class ImageRun(override val start: Int, override val length: Int, val url: String, val width: Int, val height: Int, val label: String?) : TextRun
+
+/** [createParams]: what to send to post a new comment on the video (signed in only). */
+data class CommentsPage(val count: String?, val comments: List<Comment>, val continuation: String?, val createParams: String? = null)
+
+/** A chapter of a video, from [startMs]. */
+data class Chapter(val title: String, val startMs: Long, val thumbnail: String?)
+
+/** A captions track: [url] fetches its text. */
+data class CaptionTrack(val name: String, val language: String, val url: String, val auto: Boolean)
+
+/** One line of captions, on screen from [startMs] to [endMs]. */
+data class Cue(val startMs: Long, val endMs: Long, val text: String)
+
+/** One of your playlists in the "Save to" list, and whether this video is already in it. */
+data class PlaylistOption(val id: String, val title: String, val contains: Boolean, val private: Boolean)
 
 /** A playlist (or album, course, podcast) in your library. */
 data class Playlist(
@@ -114,6 +143,14 @@ data class WatchInfo(
     val commentCount: String?,
     /** Comment orders ("Top", "Newest") and the token that loads each. */
     val commentSorts: List<Chip>,
+    val chapters: List<Chapter> = emptyList(),
+    /** "49,439,418". */
+    val exactViews: String? = null,
+    /** "1,123,456", or YouTube's rounded figure when it gives no exact one. */
+    val exactLikes: String? = null,
+    /** "11 July 2018". */
+    val date: String? = null,
+    val hashtags: List<String> = emptyList(),
     val related: List<VideoItem>,
 )
 
@@ -236,8 +273,59 @@ object YouTubeParser {
                     Chip(title, findFirst(item, "continuationCommand")?.optString("token"), item.optBoolean("selected"))
                 }
             }.orEmpty(),
+            chapters = chapters(root),
+            exactViews = primary?.optJSONObject("viewCount")?.optJSONObject("videoViewCountRenderer")
+                ?.let { text(it.optJSONObject("viewCount")) }?.removeSuffix(" views")?.removeSuffix(" view"),
+            exactLikes = likeCount?.let { java.text.NumberFormat.getIntegerInstance(java.util.Locale.US).format(it) }
+                ?: factoid(root, "Likes"),
+            date = text(primary?.optJSONObject("dateText"))?.let(::fullDate),
+            hashtags = (
+                text(primary?.optJSONObject("superTitleLink")).orEmpty() + " " +
+                    secondary?.optJSONObject("attributedDescription")?.optString("content").orEmpty()
+                ).let { all -> Regex("#[\\p{L}\\p{N}_]+").findAll(all).map { it.value }.distinct().take(12).toList() },
             related = related,
         )
+    }
+
+    /** A video's chapters: the player bar's own, or the chapters panel's. */
+    private fun chapters(root: JSONObject): List<Chapter> {
+        val found = mutableListOf<Chapter>()
+        walk(root) { key, value ->
+            if (key == "chapterRenderer" && value is JSONObject) {
+                val title = text(value.optJSONObject("title")) ?: return@walk
+                found += Chapter(title, value.optLong("timeRangeStartMillis"), bestThumbnail(value.optJSONObject("thumbnail")))
+            }
+        }
+        if (found.isEmpty()) {
+            walk(root.optJSONArray("engagementPanels")) { key, value ->
+                if (key == "macroMarkersListItemRenderer" && value is JSONObject) {
+                    val title = text(value.optJSONObject("title")) ?: return@walk
+                    val seconds = findFirst(value.optJSONObject("onTap"), "watchEndpoint")?.optLong("startTimeSeconds") ?: return@walk
+                    found += Chapter(title, seconds * 1000, bestThumbnail(value.optJSONObject("thumbnail")))
+                }
+            }
+        }
+        return found.distinctBy { it.startMs }.sortedBy { it.startMs }.takeIf { it.size > 1 }.orEmpty()
+    }
+
+    /** A figure from the description's header ("Likes", "Views"). */
+    private fun factoid(root: JSONObject, label: String): String? {
+        var found: String? = null
+        walk(root.optJSONArray("engagementPanels")) { key, value ->
+            if (found == null && key == "factoidRenderer" && value is JSONObject && text(value.optJSONObject("label")) == label) {
+                found = text(value.optJSONObject("value"))
+            }
+        }
+        return found
+    }
+
+    /** "Premiered Jul 11, 2018" → "11 July 2018". */
+    private fun fullDate(raw: String): String {
+        val date = Regex("[A-Z][a-z]{2} \\d{1,2}, \\d{4}").find(raw)?.value ?: return raw
+        return runCatching {
+            val parsed = java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.US).parse(date)!!
+            java.text.SimpleDateFormat("d MMMM yyyy", java.util.Locale.US).format(parsed)
+        }.getOrDefault(raw)
     }
 
     /** The comments engagement panel of a watch page: its count and sort menu. */
@@ -328,10 +416,89 @@ object YouTubeParser {
                 dislikeAction = action(surface, "dislikeCommand"),
                 undislikeAction = action(surface, "undislikeCommand"),
                 hearted = state?.optString("heartState") == "TOOLBAR_HEART_STATE_HEARTED",
+                runs = runs(props.optJSONObject("content")),
+                replyParams = surface?.optJSONObject("replyCommand")
+                    ?.let { findFirst(it, "createCommentReplyEndpoint") }?.optString("createReplyParams")?.takeIf { it.isNotBlank() },
             )
         }
         val all = (list + old.map { it.copy(repliesToken = replyTokens[it.id]) }).distinctBy { it.id }
-        return CommentsPage(count, all, continuation)
+        val createParams = findFirst(root, "createCommentEndpoint")?.optString("createCommentParams")?.takeIf { it.isNotBlank() }
+        return CommentsPage(count, all, continuation, createParams)
+    }
+
+    /** A comment's links (commandRuns) and inline images (attachmentRuns). */
+    private fun runs(content: JSONObject?): List<TextRun> {
+        content ?: return emptyList()
+        val runs = mutableListOf<TextRun>()
+        content.optJSONArray("commandRuns")?.let { list ->
+            for (i in 0 until list.length()) {
+                val r = list.optJSONObject(i) ?: continue
+                val seek = findFirst(r, "watchEndpoint")?.takeIf { it.has("startTimeSeconds") }?.optInt("startTimeSeconds")
+                val url = findFirst(r, "urlEndpoint")?.optString("url")?.takeIf { it.isNotBlank() }
+                runs += LinkRun(r.optInt("startIndex"), r.optInt("length"), seek, url)
+            }
+        }
+        content.optJSONArray("attachmentRuns")?.let { list ->
+            for (i in 0 until list.length()) {
+                val r = list.optJSONObject(i) ?: continue
+                val element = r.optJSONObject("element") ?: continue
+                val image = findFirst(element.optJSONObject("type"), "image") ?: continue
+                val sources = image.optJSONArray("sources") ?: continue
+                val url = largest(sources)?.let(::fixUrl) ?: continue
+                val layout = element.optJSONObject("properties")?.optJSONObject("layoutProperties")
+                val w = layout?.optJSONObject("width")?.optInt("value") ?: 16
+                val h = layout?.optJSONObject("height")?.optInt("value") ?: 16
+                val label = element.optJSONObject("properties")?.optJSONObject("accessibilityProperties")?.optString("label")
+                runs += ImageRun(r.optInt("startIndex"), r.optInt("length"), url, w, h, label)
+            }
+        }
+        return runs.sortedBy { it.start }
+    }
+
+    /** Caption tracks from a player response. */
+    fun captionTracks(json: String): List<CaptionTrack> {
+        val tracks = JSONObject(json).optJSONObject("captions")?.optJSONObject("playerCaptionsTracklistRenderer")
+            ?.optJSONArray("captionTracks") ?: return emptyList()
+        return (0 until tracks.length()).mapNotNull { i ->
+            val t = tracks.optJSONObject(i) ?: return@mapNotNull null
+            val url = t.optString("baseUrl").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            CaptionTrack(
+                name = text(t.optJSONObject("name")) ?: t.optString("languageCode"),
+                language = t.optString("languageCode"),
+                url = url,
+                auto = t.optString("kind") == "asr",
+            )
+        }
+    }
+
+    /** Caption lines from a timedtext json3 document. */
+    fun cues(json: String): List<Cue> {
+        val events = JSONObject(json).optJSONArray("events") ?: return emptyList()
+        return (0 until events.length()).mapNotNull { i ->
+            val e = events.optJSONObject(i) ?: return@mapNotNull null
+            val segs = e.optJSONArray("segs") ?: return@mapNotNull null
+            val text = buildString { for (j in 0 until segs.length()) append(segs.optJSONObject(j)?.optString("utf8").orEmpty()) }.trim()
+            if (text.isBlank()) return@mapNotNull null
+            val start = e.optLong("tStartMs")
+            Cue(start, start + e.optLong("dDurationMs", 2000), text)
+        }
+    }
+
+    /** Your playlists in the "Save to" list (playlist/get_add_to_playlist). */
+    fun playlistOptions(json: String): List<PlaylistOption> {
+        val list = mutableListOf<PlaylistOption>()
+        walk(JSONObject(json)) { key, value ->
+            if (key == "playlistAddToOptionRenderer" && value is JSONObject) {
+                val id = value.optString("playlistId").takeIf { it.isNotBlank() } ?: return@walk
+                list += PlaylistOption(
+                    id = id,
+                    title = text(value.optJSONObject("title")) ?: id,
+                    contains = value.optString("containsSelectedVideos") == "ALL",
+                    private = "PRIVACY_PRIVATE" in value.optString("privacy") || "LOCK" in value.optJSONObject("privacyIcon")?.toString().orEmpty(),
+                )
+            }
+        }
+        return list.distinctBy { it.id }
     }
 
     /** Playlists, albums, courses and podcasts on a library page, in the order YouTube lists them. */
@@ -407,12 +574,25 @@ object YouTubeParser {
                     time = text(value.optJSONObject("sentTimeText")),
                     avatar = bestThumbnail(value.optJSONObject("thumbnail")),
                     thumbnail = bestThumbnail(value.optJSONObject("videoThumbnail")),
-                    videoId = findFirst(value.optJSONObject("navigationEndpoint"), "watchEndpoint")?.optString("videoId")?.takeIf { it.isNotBlank() },
+                    videoId = notificationVideo(value),
                     read = value.optBoolean("read"),
                 )
             }
         }
         return list
+    }
+
+    /**
+     * The video a notification is about. Its tap action varies (a watch endpoint, a command
+     * wrapping one, a URL), so fall back to any video ID in it, then the thumbnail's.
+     */
+    private fun notificationVideo(n: JSONObject): String? {
+        findFirst(n.optJSONObject("navigationEndpoint"), "watchEndpoint")?.optString("videoId")?.takeIf { it.length == 11 }?.let { return it }
+        val raw = n.toString()
+        Regex("\"videoId\":\"([\\w-]{11})\"").find(raw)?.let { return it.groupValues[1] }
+        Regex("watch\\?v=([\\w-]{11})").find(raw)?.let { return it.groupValues[1] }
+        Regex("/vi(?:_webp)?/([\\w-]{11})/").find(raw)?.let { return it.groupValues[1] }
+        return null
     }
 
     /** The bell menu: old-style menuServiceItemRenderers or new listItemViewModels. */

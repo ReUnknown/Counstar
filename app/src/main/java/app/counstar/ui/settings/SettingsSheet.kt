@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -67,7 +68,7 @@ fun SettingsSheet(onDismiss: () -> Unit) {
                 Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = colors.primary)
                 Column(Modifier.weight(1f)) {
                     Text("Video glow", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                    Text("The video's colors glow softly around the player", fontSize = 12.sp, color = colors.onSurfaceVariant)
+                    Text("The video's colors glow softly around the player", fontSize = 13.sp, lineHeight = 17.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
                 }
                 Switch(checked = Settings.ambientGlow, onCheckedChange = { Settings.saveAmbientGlow(it) })
             }
@@ -156,9 +157,9 @@ private fun Tile(shape: Shape, onClick: () -> Unit, content: @Composable android
     Row(
         Modifier
             .fillMaxWidth()
-            .height(72.dp)
+            .heightIn(min = 72.dp)
             .pressable(shape, color = MaterialTheme.colorScheme.surfaceContainerHigh, pressedScale = 0.98f, onClick = onClick)
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         content = content,

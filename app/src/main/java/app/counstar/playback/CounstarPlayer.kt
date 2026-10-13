@@ -19,7 +19,10 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import app.counstar.data.CaptionTrack
+import app.counstar.data.Cue
 import app.counstar.data.Feeds
+import app.counstar.data.YouTubeParser
 import app.counstar.data.VideoItem
 import com.metrolist.innertube.WebApi
 import com.metrolist.innertube.YouTube
@@ -56,6 +59,28 @@ object CounstarPlayer {
     /** Preview frames for scrubbing, when YouTube has them. */
     var storyboard by mutableStateOf<Storyboard?>(null)
         private set
+    /** Qualities this video comes in, tallest first, and the one playing. */
+    var heights by mutableStateOf<List<Int>>(emptyList())
+        private set
+    var height by mutableStateOf<Int?>(null)
+        private set
+    /** Picked for this video (null: automatic, up to the setting). */
+    var pickedHeight by mutableStateOf<Int?>(null)
+        private set
+    var speed by mutableStateOf(1f)
+        private set
+    var loop by mutableStateOf(false)
+        private set
+    /** The video's caption tracks, the one showing (null: off), and its lines. */
+    var captionTracks by mutableStateOf<List<CaptionTrack>>(emptyList())
+        private set
+    var caption by mutableStateOf<CaptionTrack?>(null)
+        private set
+    var cues by mutableStateOf<List<Cue>>(emptyList())
+        private set
+    private var captionJob: Job? = null
+    /** The language captions were last turned on in, to pick it again on the next video. */
+    private var preferredLanguage: String? = null
 
     private val http by lazy {
         OkHttpClient.Builder()
@@ -115,8 +140,63 @@ object CounstarPlayer {
         load(item, startAt = 0L, isRetry = false)
     }
 
+    /** Plays this video at [h] (null: automatic), from where it is now. */
+    fun pickQuality(h: Int?) {
+        val item = current ?: return
+        pickedHeight = h
+        StreamResolver.heightOverride = h
+        load(item, startAt = player.currentPosition, isRetry = true)
+    }
+
+    fun changeSpeed(value: Float) {
+        speed = value
+        player.setPlaybackSpeed(value)
+    }
+
+    /** Speeds up while a finger holds the video, then back to the chosen speed. */
+    fun holdFast(on: Boolean) {
+        player.setPlaybackSpeed(if (on) 2f else speed)
+    }
+
+    fun changeLoop(on: Boolean) {
+        loop = on
+        player.repeatMode = if (on) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+    }
+
+    /** Shows captions from [track] (null: off). */
+    fun showCaptions(track: CaptionTrack?) {
+        captionJob?.cancel()
+        caption = track
+        cues = emptyList()
+        if (track == null) {
+            preferredLanguage = null
+            return
+        }
+        preferredLanguage = track.language
+        captionJob = scope.launch {
+            withContext(Dispatchers.IO) { WebApi.fetch(track.url.replace("&fmt=srv3", "") + "&fmt=json3").mapCatching(YouTubeParser::cues) }
+                .onSuccess { cues = it }
+                .onFailure { Timber.w(it, "Couldn't load captions") }
+        }
+    }
+
+    /** The caption tracks for [videoId], and captions back on if they were on before. */
+    private fun loadCaptionTracks(videoId: String) {
+        scope.launch {
+            val tracks = withContext(Dispatchers.IO) { WebApi.captionsPlayer(videoId).mapCatching(YouTubeParser::captionTracks) }.getOrDefault(emptyList())
+            if (current?.id != videoId) return@launch
+            captionTracks = tracks
+            val language = preferredLanguage ?: return@launch
+            (tracks.firstOrNull { it.language == language && !it.auto } ?: tracks.firstOrNull { it.language == language })?.let(::showCaptions)
+        }
+    }
+
     fun stop() {
         loadJob?.cancel()
+        captionJob?.cancel()
+        captionTracks = emptyList()
+        caption = null
+        cues = emptyList()
         player.stop()
         player.clearMediaItems()
         current = null
@@ -128,7 +208,17 @@ object CounstarPlayer {
     private fun load(item: VideoItem, startAt: Long, isRetry: Boolean) {
         loadJob?.cancel()
         if (!isRetry) retried = false
-        if (current?.id != item.id) storyboard = null
+        if (current?.id != item.id) {
+            storyboard = null
+            heights = emptyList()
+            pickedHeight = null
+            StreamResolver.heightOverride = null
+            captionTracks = emptyList()
+            captionJob?.cancel()
+            caption = null
+            cues = emptyList()
+            loadCaptionTracks(item.id)
+        }
         current = item
         error = null
         loading = true
@@ -138,7 +228,10 @@ object CounstarPlayer {
             stream
                 .onSuccess {
                     storyboard = Storyboard.parse(it.storyboardSpec)
+                    if (it.heights.isNotEmpty()) heights = it.heights
+                    height = it.height
                     player.setMediaSource(mediaSource(it), startAt)
+                    player.setPlaybackSpeed(speed)
                     player.prepare()
                     player.play()
                     if (!isRetry) markWatched(item.id, it.statsUrl)

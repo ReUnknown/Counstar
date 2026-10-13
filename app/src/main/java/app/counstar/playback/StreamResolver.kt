@@ -42,6 +42,7 @@ class VideoStream(
     val height: Int?,
     val storyboardSpec: String? = null,
     val statsUrl: String? = null,
+    val heights: List<Int> = emptyList(),
 ) {
     /** An HLS manifest: picture and sound together, which the player streams as one. */
     val isHls: Boolean get() = videoUrl == audioUrl || "/manifest/hls" in videoUrl || ".m3u8" in videoUrl
@@ -51,7 +52,10 @@ class VideoStream(
 object StreamResolver {
     private const val TAG = "CounstarStreams"
     /** The highest quality to stream, from Settings. */
-    private val MAX_HEIGHT get() = app.counstar.data.Settings.maxHeight
+    private val MAX_HEIGHT get() = heightOverride ?: app.counstar.data.Settings.maxHeight
+
+    /** A quality picked for the current video, over the setting. */
+    @Volatile var heightOverride: Int? = null
 
     @Volatile private var applicationContext: Context? = null
     @Volatile private var currentBundle: Bundle? = null
@@ -106,6 +110,7 @@ object StreamResolver {
             height = stream.height,
             storyboardSpec = stream.storyboardSpec,
             statsUrl = stream.statsUrl,
+            heights = stream.heights,
         )
     }
 

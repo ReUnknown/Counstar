@@ -141,8 +141,9 @@ fun YouScreen(session: Session, contentPadding: PaddingValues) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SectionTitle("Library", onOpen = null)
                 LazyRow(
+                    Modifier.padding(top = 4.dp, bottom = 10.dp),
                     contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     item { SortChip(sort) { sort = it } }

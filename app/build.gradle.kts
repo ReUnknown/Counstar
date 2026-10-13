@@ -13,8 +13,8 @@ android {
         applicationId = "app.counstar"
         minSdk = 31
         targetSdk = 37
-        versionCode = 5
-        versionName = "0.4.0"
+        versionCode = 6
+        versionName = "0.4.5"
         // Every phone and tablet Counstar targets is 64-bit: no 32-bit native code.
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
@@ -86,6 +86,7 @@ dependencies {
     implementation(libs.media3.ui.compose)
     implementation(libs.coil.compose)
     implementation(libs.coil.network)
+    implementation(libs.coil.gif)
     implementation(libs.timber)
     implementation(libs.androidx.webkit)
     implementation(libs.androidx.palette)

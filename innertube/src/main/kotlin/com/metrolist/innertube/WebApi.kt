@@ -104,6 +104,60 @@ object WebApi {
     suspend fun commentAction(action: String) =
         post("comment/perform_comment_action", JSONObject().put("actions", JSONArray().put(action))).checked()
 
+    /** Posts a comment on a video, with the params from its comments' header. */
+    suspend fun createComment(params: String, text: String) =
+        post("comment/create_comment", JSONObject().put("createCommentParams", params).put("commentText", text)).checked()
+
+    /** Replies to a comment, with the params from its reply button. */
+    suspend fun createReply(params: String, text: String) =
+        post("comment/create_comment_reply", JSONObject().put("createReplyParams", params).put("commentText", text)).checked()
+
+    /** Your playlists, and which already hold the video. */
+    suspend fun playlistOptions(videoId: String) =
+        post("playlist/get_add_to_playlist", JSONObject().put("videoIds", JSONArray().put(videoId)).put("excludeWatchLater", false))
+
+    /**
+     * A video's caption tracks. The Android app's player request lists tracks whose links work
+     * without a PO token, unlike the web player's.
+     */
+    suspend fun captionsPlayer(videoId: String): Result<String> = runCatching {
+        val body = JSONObject()
+            .put("videoId", videoId)
+            .put("contentCheckOk", true)
+            .put("racyCheckOk", true)
+            .put("context", JSONObject().put("client", JSONObject().put("clientName", "ANDROID").put("clientVersion", "20.10.38").put("hl", "en").put("gl", "US")))
+        val response = YouTube.extractionTransport().httpClient.post("$ORIGIN/youtubei/v1/player?prettyPrint=false") {
+            contentType(ContentType.Application.Json)
+            header("User-Agent", "com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip")
+            header("X-YouTube-Client-Name", "3")
+            header("X-YouTube-Client-Version", "20.10.38")
+            setBody(body.toString())
+        }
+        check(response.status.isSuccess()) { "HTTP ${response.status.value} from player" }
+        response.bodyAsText()
+    }
+
+    /** Fetches a plain URL (caption text). */
+    suspend fun fetch(url: String): Result<String> = runCatching {
+        val response = YouTube.extractionTransport().httpClient.get(url) { header("User-Agent", client.userAgent) }
+        check(response.status.isSuccess()) { "HTTP ${response.status.value}" }
+        response.bodyAsText()
+    }
+
+    /** Adds a video to, or removes it from, one of your playlists. */
+    suspend fun editPlaylist(playlistId: String, videoId: String, add: Boolean) = post(
+        "browse/edit_playlist",
+        JSONObject()
+            .put("playlistId", playlistId)
+            .put(
+                "actions",
+                JSONArray().put(
+                    if (add) JSONObject().put("action", "ACTION_ADD_VIDEO").put("addedVideoId", videoId)
+                    else JSONObject().put("action", "ACTION_REMOVE_VIDEO_BY_VIDEO_ID").put("removedVideoId", videoId),
+                ),
+            ),
+    ).checked()
+
     /** Adds to or removes from Watch later. */
     suspend fun watchLater(videoId: String, add: Boolean) = post(
         "browse/edit_playlist",

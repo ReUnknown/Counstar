@@ -193,7 +193,7 @@ private fun Shell(session: Session) {
                 // The bar slides up under the status bar: keep its content out of the clock.
                 Box(Modifier.fillMaxWidth().height(statusBar).hazeEffect(haze, glass))
             }
-        } else {
+        } else if (Nav.playlist == null) {
             Box(Modifier.fillMaxWidth().height(statusBar).background(MaterialTheme.colorScheme.background))
         }
 
