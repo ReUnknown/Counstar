@@ -7,11 +7,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -57,7 +55,6 @@ import app.counstar.data.YouTubeParser
 import app.counstar.ui.ChipButton
 import app.counstar.ui.Nav
 import app.counstar.ui.components.Avatar
-import app.counstar.ui.components.BlurredImage
 import app.counstar.ui.components.pressable
 import coil3.compose.AsyncImage
 import com.metrolist.innertube.WebApi
@@ -66,8 +63,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Notifications, done better than YouTube's list: what's new comes first as big cards on the
- * video's own frosted art; everything else is grouped by when it happened, in rounded stacks.
+ * Notifications: compact rows grouped by when they happened (Today, This week, Earlier), each
+ * group one rounded stack. Unread ones carry a dot. Tap one to watch its video.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -86,31 +83,19 @@ fun NotificationsScreen(bottomPadding: Dp) {
     LaunchedEffect(Unit) { load() }
 
     val all = items.orEmpty()
-    val filters = listOf("All", "New", "Videos", "Other")
+    val filters = listOf("All", "Unread", "Videos", "Other")
     val shown = when (filter) {
         1 -> all.filter { !it.read }
         2 -> all.filter { it.videoId != null }
         3 -> all.filter { it.videoId == null }
         else -> all
     }
-    val fresh = shown.filter { !it.read }
-    val rest = shown.filter { it.read }
-    val groups = rest.groupBy { whenGroup(it.time) }.toSortedMap(compareBy { it.ordinal })
+    val groups = shown.groupBy { whenGroup(it.time) }.toSortedMap(compareBy { it.ordinal })
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { Nav.notificationsOpen = false }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back") }
-            Text("Notifications", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.8).sp, modifier = Modifier.weight(1f))
-            val unread = all.count { !it.read }
-            if (unread > 0) {
-                Text(
-                    "$unread new",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.primary).padding(horizontal = 10.dp, vertical = 4.dp),
-                )
-            }
+            Text("Notifications", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.8).sp, modifier = Modifier.weight(1f))
         }
         LazyRow(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
@@ -127,16 +112,12 @@ fun NotificationsScreen(bottomPadding: Dp) {
                 items == null && !failed -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingIndicator(Modifier.size(64.dp)) }
                 shown.isEmpty() -> Empty(if (failed) "Couldn't load your notifications." else "You're all caught up.")
                 else -> LazyColumn(
-                    contentPadding = PaddingValues(top = 8.dp, bottom = bottomPadding + 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(top = 4.dp, bottom = bottomPadding + 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    if (fresh.isNotEmpty()) {
-                        item { Heading("New") }
-                        itemsIndexed(fresh) { _, n -> HeroCard(n) }
-                    }
                     groups.forEach { (group, list) ->
-                        item { Heading(group.title) }
+                        item(key = "h" + group.name) { Heading(group.title) }
                         itemsIndexed(list) { i, n -> StackRow(n, first = i == 0, last = i == list.lastIndex) }
                     }
                 }
@@ -156,81 +137,53 @@ private fun whenGroup(time: String?): When = when {
 
 @Composable
 private fun Heading(text: String) {
-    Text(text, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 20.dp, top = 10.dp, bottom = 2.dp))
+    Text(text, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 20.dp, top = 14.dp, bottom = 6.dp))
 }
 
+/** Straight to the video: notifications close and the watch page opens over the app. */
 private fun open(n: Notification) {
     val id = n.videoId ?: return
+    // "Channel uploaded: Title" → "Title", until the watch page fills in the real details.
+    val title = n.message.substringAfter(": ", n.message)
     Nav.notificationsOpen = false
-    Nav.watch(VideoItem(id = id, title = n.message, thumbnail = n.thumbnail ?: "https://i.ytimg.com/vi/$id/hqdefault.jpg"))
+    Nav.watch(VideoItem(id = id, title = title, thumbnail = n.thumbnail ?: "https://i.ytimg.com/vi/$id/hqdefault.jpg"))
 }
 
-/** A new notification: the video big, its art blurred into frosted glass under the message. */
-@Composable
-private fun HeroCard(n: Notification) {
-    Column(
-        Modifier
-            .padding(horizontal = 16.dp)
-            .fillMaxWidth()
-            .pressable(RoundedCornerShape(28.dp), pressedScale = 0.97f) { open(n) },
-    ) {
-        Box(Modifier.fillMaxWidth()) {
-            n.thumbnail?.let { BlurredImage(it, Modifier.matchParentSize(), radius = 48.dp) }
-            Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.38f)))
-            Column {
-                if (n.thumbnail != null) {
-                    AsyncImage(
-                        n.thumbnail,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp)),
-                    )
-                }
-                Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box {
-                        Avatar(n.avatar, 40.dp)
-                        Box(Modifier.align(Alignment.TopEnd).offset(x = 2.dp, y = (-2).dp).size(12.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
-                    }
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text(n.message, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 3, overflow = TextOverflow.Ellipsis, lineHeight = 20.sp)
-                        n.time?.let { Text(it, color = Color.White.copy(alpha = 0.72f), fontSize = 12.sp) }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** An older notification, in a rounded stack with the others from the same stretch of time. */
+/** One notification, compact, in a rounded stack with the others from the same stretch of time. */
 @Composable
 private fun StackRow(n: Notification, first: Boolean, last: Boolean) {
-    val big = 24.dp
-    val small = 6.dp
+    val big = 22.dp
+    val small = 5.dp
+    val colors = MaterialTheme.colorScheme
     Row(
         Modifier
-            .padding(horizontal = 16.dp)
-            .offset(y = if (first) 0.dp else (-7).dp)
+            .padding(horizontal = 12.dp)
             .fillMaxWidth()
             .pressable(
                 RoundedCornerShape(if (first) big else small, if (first) big else small, if (last) big else small, if (last) big else small),
-                color = MaterialTheme.colorScheme.surfaceContainer,
+                color = if (n.read) colors.surfaceContainer else colors.surfaceContainerHigh,
                 pressedScale = 0.98f,
             ) { open(n) }
-            .padding(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(start = 8.dp, end = 10.dp, top = 9.dp, bottom = 9.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (n.thumbnail != null) {
-            Box {
-                AsyncImage(n.thumbnail, null, contentScale = ContentScale.Crop, modifier = Modifier.width(112.dp).height(63.dp).clip(RoundedCornerShape(14.dp)))
-                Avatar(n.avatar, 26.dp, modifier = Modifier.align(Alignment.BottomStart).offset(x = (-4).dp, y = 4.dp), ring = MaterialTheme.colorScheme.surfaceContainer)
-            }
-        } else {
-            Avatar(n.avatar, 44.dp)
+        // Unread: a dot in the margin.
+        Box(Modifier.size(6.dp).clip(CircleShape).background(if (n.read) Color.Transparent else colors.primary))
+        Avatar(n.avatar, 34.dp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                n.message,
+                fontSize = 13.sp,
+                lineHeight = 17.sp,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                fontWeight = if (n.read) FontWeight.Normal else FontWeight.Medium,
+            )
+            n.time?.let { Text(it, fontSize = 11.sp, color = colors.onSurfaceVariant) }
         }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(n.message, fontSize = 14.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, lineHeight = 19.sp)
-            n.time?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if (n.thumbnail != null) {
+            AsyncImage(n.thumbnail, null, contentScale = ContentScale.Crop, modifier = Modifier.width(88.dp).height(50.dp).clip(RoundedCornerShape(10.dp)))
         }
     }
 }

@@ -1,6 +1,19 @@
 package app.counstar.ui.watch
 
 import android.content.Intent
+import android.widget.Toast
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.ui.graphics.graphicsLayer
+import app.counstar.ui.components.frost
+import app.counstar.ui.theme.isCounstarDark
+import dev.chrisbanes.haze.hazeEffect
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
@@ -29,7 +42,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BookmarkBorder
-import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.NotificationsOff
@@ -80,12 +92,8 @@ import app.counstar.playback.CounstarPlayer
 import app.counstar.ui.ChipButton
 import app.counstar.ui.Nav
 import app.counstar.ui.components.Avatar
-import app.counstar.ui.components.BackdropBlurBand
-import app.counstar.ui.components.FROSTED_TINT
 import app.counstar.ui.components.VideoCard
-import app.counstar.ui.components.backdropSource
 import app.counstar.ui.components.pressable
-import app.counstar.ui.components.rememberBackdrop
 import com.metrolist.innertube.WebApi
 import com.metrolist.innertube.YouTube
 import kotlinx.coroutines.Dispatchers
@@ -125,15 +133,42 @@ fun WatchScreen(fullscreen: Boolean, onToggleFullscreen: () -> Unit) {
         return
     }
 
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        // Acrylic glow from the video itself, spilling out under the player and fading into the page.
-        AmbientLight(item.thumbnail, Modifier.fillMaxWidth().height(560.dp))
+    val list = rememberLazyListState()
+    var commentsOpen by remember(item.id) { mutableStateOf(false) }
+    val details = info
+    val comments = remember(details?.commentsToken) {
+        details?.commentsToken?.let { CommentsState(it, details.commentSorts, details.commentCount) }
+    }
+    val dark = isCounstarDark()
+    val page = MaterialTheme.colorScheme.background
+    Box(Modifier.fillMaxSize().background(page)) {
+        // Acrylic glow from the video itself, spilling out under the player and fading into the
+        // page. It belongs to the top of the page: scrolling down carries it away with the title.
+        // Dimmer in dark mode, so only the video itself is bright.
+        val glowHeight = 560.dp
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(560.dp)
-                .background(Brush.verticalGradient(0.3f to Color.Transparent, 1f to MaterialTheme.colorScheme.background)),
-        )
+                .height(glowHeight)
+                .graphicsLayer {
+                    val gone = list.firstVisibleItemIndex > 0
+                    translationY = if (gone) -size.height else -list.firstVisibleItemScrollOffset.toFloat()
+                    alpha = if (gone) 0f else 1f
+                },
+        ) {
+            AmbientLight(item.thumbnail, Modifier.matchParentSize(), strength = if (dark) 0.5f else 0.8f)
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0f to page.copy(alpha = if (dark) 0.25f else 0f),
+                            0.3f to Color.Transparent,
+                            1f to page,
+                        ),
+                    ),
+            )
+        }
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxWidth().statusBarsPadding())
             VideoPlayer(
@@ -143,23 +178,41 @@ fun WatchScreen(fullscreen: Boolean, onToggleFullscreen: () -> Unit) {
                 heatmap = info?.heatmap.orEmpty(),
                 modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
             )
-            WatchDetails(item, info, raw, failed)
+            Box(Modifier.fillMaxSize()) {
+                WatchDetails(item, info, raw, failed, list, comments, onOpenComments = { commentsOpen = true })
+                // Comments take over everything under the video, like YouTube's app.
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = commentsOpen && comments != null,
+                    enter = slideInVertically(tween(340)) { it } + fadeIn(tween(160)),
+                    exit = slideOutVertically(tween(260)) { it } + fadeOut(tween(200)),
+                ) {
+                    comments?.let { CommentsPanel(it, onClose = { commentsOpen = false }) }
+                }
+            }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun WatchDetails(item: VideoItem, details: WatchInfo?, raw: String?, failed: Boolean) {
+private fun WatchDetails(
+    item: VideoItem,
+    details: WatchInfo?,
+    raw: String?,
+    failed: Boolean,
+    list: LazyListState,
+    comments: CommentsState?,
+    onOpenComments: () -> Unit,
+) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var expanded by remember(item.id) { mutableStateOf(false) }
     var liked by remember(item.id, details) { mutableStateOf(details?.liked ?: false) }
     var disliked by remember(item.id, details) { mutableStateOf(details?.disliked ?: false) }
     var saved by remember(item.id) { mutableStateOf(false) }
-    var reporting by remember(item.id) { mutableStateOf(false) }
-    var commentsOpen by remember(item.id) { mutableStateOf(false) }
-    val comments = remember(details?.commentsToken) { details?.commentsToken?.let { CommentsState(it) } }
+    fun failed(what: String, error: Throwable) {
+        Toast.makeText(context, "Couldn't $what: ${error.message}", Toast.LENGTH_SHORT).show()
+    }
     val baseLikes = details?.likeCount?.let { it - if (details.liked) 1 else 0 }
 
     // Up next: the watch page's own list, plus chips to pull more. YouTube's own chips when it
@@ -185,7 +238,6 @@ private fun WatchDetails(item: VideoItem, details: WatchInfo?, raw: String?, fai
     val feed = chipFeed ?: upNext
     LaunchedEffect(chipFeed) { chipFeed?.load() }
 
-    val list = rememberLazyListState()
     LaunchedEffect(item.id) { list.scrollToItem(0) }
     val nearEnd by remember {
         derivedStateOf {
@@ -219,13 +271,13 @@ private fun WatchDetails(item: VideoItem, details: WatchInfo?, raw: String?, fai
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val height = maxHeight
-        val backdrop = rememberBackdrop()
+        val haze = rememberHazeState()
         LazyColumn(
             state = list,
             // Lists run on under the gesture bar instead of stopping above it.
             contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp + bottomInset),
             verticalArrangement = Arrangement.spacedBy(16.dp),
-            modifier = Modifier.fillMaxSize().backdropSource(backdrop),
+            modifier = Modifier.fillMaxSize().hazeSource(haze),
         ) {
             item(key = "title") {
                 Column(
@@ -295,7 +347,7 @@ private fun WatchDetails(item: VideoItem, details: WatchInfo?, raw: String?, fai
                                 liked = want
                                 if (want) disliked = false
                                 scope.launch {
-                                    (if (want) WebApi.like(item.id) else WebApi.removeLike(item.id)).onFailure { liked = !want }
+                                    (if (want) WebApi.like(item.id) else WebApi.removeLike(item.id)).onFailure { liked = !want; failed("like that", it) }
                                 }
                             }
                             Action(
@@ -309,7 +361,7 @@ private fun WatchDetails(item: VideoItem, details: WatchInfo?, raw: String?, fai
                                 disliked = want
                                 if (want) liked = false
                                 scope.launch {
-                                    (if (want) WebApi.dislike(item.id) else WebApi.removeLike(item.id)).onFailure { disliked = !want }
+                                    (if (want) WebApi.dislike(item.id) else WebApi.removeLike(item.id)).onFailure { disliked = !want; failed("dislike that", it) }
                                 }
                             }
                         }
@@ -331,16 +383,13 @@ private fun WatchDetails(item: VideoItem, details: WatchInfo?, raw: String?, fai
                         ) {
                             val want = !saved
                             saved = want
-                            scope.launch { WebApi.watchLater(item.id, want).onFailure { saved = !want } }
+                            scope.launch { WebApi.watchLater(item.id, want).onFailure { saved = !want; failed("save that", it) } }
                         }
-                    }
-                    item {
-                        Action(icon = Icons.Outlined.Flag, label = "Report") { reporting = true }
                     }
                 }
             }
             if (comments != null) {
-                item(key = "comments") { CommentsCard(comments) { commentsOpen = true } }
+                item(key = "comments") { CommentsCard(comments, onOpenComments) }
             }
             if (chips.isNotEmpty()) {
                 item(key = "chips") { ChipsRow() }
@@ -360,14 +409,10 @@ private fun WatchDetails(item: VideoItem, details: WatchInfo?, raw: String?, fai
             }
         }
 
-        if (commentsOpen && comments != null) CommentsSheet(comments) { commentsOpen = false }
-        if (reporting) ReportDialog(item.id, details?.reportParams) { reporting = false }
 
         // Once the chips scroll up to the top, they stay there on frosted glass.
         if (chipsStuck) {
-            Box(Modifier.fillMaxWidth().height(50.dp).clipToBounds()) {
-                BackdropBlurBand(backdrop, height, atBottom = false, modifier = Modifier.matchParentSize())
-                Box(Modifier.matchParentSize().background(colors.surface.copy(alpha = FROSTED_TINT)))
+            Box(Modifier.fillMaxWidth().height(50.dp).hazeEffect(haze, frost())) {
                 ChipsRow()
             }
         }
@@ -387,6 +432,8 @@ private fun SubscribeButton(channelId: String, initiallySubscribed: Boolean, opt
         mutableStateOf(options.firstOrNull { it.selected }?.kind ?: BellOption.Kind.Personalized)
     }
     var menu by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    fun toast(text: String) = Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
     Box {
         if (!subscribed) {
             Text(
@@ -398,7 +445,7 @@ private fun SubscribeButton(channelId: String, initiallySubscribed: Boolean, opt
                     .pressable(RoundedCornerShape(20.dp), color = colors.onSurface) {
                         subscribed = true
                         bell = BellOption.Kind.Personalized
-                        scope.launch { WebApi.subscribe(channelId).onFailure { subscribed = false } }
+                        scope.launch { WebApi.subscribe(channelId).onFailure { subscribed = false; toast("Couldn't subscribe: ${it.message}") } }
                     }
                     .padding(horizontal = 18.dp, vertical = 10.dp),
             )
@@ -429,7 +476,7 @@ private fun SubscribeButton(channelId: String, initiallySubscribed: Boolean, opt
                         menu = false
                         val before = bell
                         bell = option.kind
-                        scope.launch { WebApi.setChannelNotifications(option.params).onFailure { bell = before } }
+                        scope.launch { WebApi.setChannelNotifications(option.params).onFailure { bell = before; toast("Couldn't change notifications: ${it.message}") } }
                     },
                 )
             }
@@ -440,7 +487,7 @@ private fun SubscribeButton(channelId: String, initiallySubscribed: Boolean, opt
                 onClick = {
                     menu = false
                     subscribed = false
-                    scope.launch { WebApi.unsubscribe(channelId).onFailure { subscribed = true } }
+                    scope.launch { WebApi.unsubscribe(channelId).onFailure { subscribed = true; toast("Couldn't unsubscribe: ${it.message}") } }
                 },
             )
         }

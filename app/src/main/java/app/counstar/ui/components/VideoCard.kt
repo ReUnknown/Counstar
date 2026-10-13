@@ -221,3 +221,35 @@ fun Avatar(url: String?, size: Dp, modifier: Modifier = Modifier, ring: Color? =
         if (url != null) AsyncImage(url, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
     }
 }
+
+/** A video as one row of a list (history, playlists): thumbnail on the left, details beside it. */
+@Composable
+fun VideoRow(item: VideoItem, onClick: () -> Unit, modifier: Modifier = Modifier, index: Int? = null) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .pressable(RoundedCornerShape(16.dp), pressedScale = 0.98f, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (index != null) {
+            Text(
+                index.toString(),
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.width(22.dp),
+            )
+        }
+        Thumbnail(item, Modifier.width(160.dp), corner = 14.dp, small = true)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(item.title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, lineHeight = 19.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            item.channelName?.let {
+                Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            listOfNotNull(item.views, item.published).joinToString(" · ").takeIf { it.isNotBlank() }?.let {
+                Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}

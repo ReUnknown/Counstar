@@ -135,5 +135,53 @@ object Feeds {
         history = Feed.browse("FEhistory")
         homeChip = null
         homeChipFeed = null
+        Library.clear()
+    }
+
+    /** A playlist's videos ("WL" is Watch later, "LL" Liked videos). */
+    fun playlist(id: String) = Feed.browse("VL$id")
+}
+
+/**
+ * Your library: playlists, music, courses and podcasts you've made or saved (YouTube's
+ * "Playlists" page), and who you're signed in as.
+ */
+object Library {
+    var playlists by mutableStateOf<List<Playlist>>(emptyList())
+        private set
+    var loading by mutableStateOf(false)
+        private set
+    var loaded by mutableStateOf(false)
+        private set
+    var account by mutableStateOf<Account?>(null)
+        private set
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    fun load(force: Boolean = false) {
+        if ((loaded || loading) && !force) return
+        loading = true
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) { WebApi.accountMenu().mapCatching(YouTubeParser::account) }
+                    .onSuccess { account = it }
+                // The Playlists page first; older accounts' library page if that comes back empty.
+                var found = emptyList<Playlist>()
+                for (page in listOf("FEplaylist_aggregation", "FElibrary", "FEyou")) {
+                    found = withContext(Dispatchers.IO) { WebApi.browse(page).mapCatching { YouTubeParser.playlists(it).first } }
+                        .getOrDefault(emptyList())
+                    if (found.isNotEmpty()) break
+                }
+                playlists = found
+                loaded = true
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    fun clear() {
+        playlists = emptyList()
+        account = null
+        loaded = false
     }
 }

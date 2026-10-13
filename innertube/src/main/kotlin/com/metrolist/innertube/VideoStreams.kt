@@ -34,6 +34,8 @@ object VideoStreams {
         val client: String,
         /** YouTube's storyboard spec: the little preview frames shown while scrubbing. */
         val storyboardSpec: String?,
+        /** Where to report a playback, so the video lands in watch history. */
+        val statsUrl: String? = null,
     )
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -90,6 +92,12 @@ object VideoStreams {
                         ?.optString("spec")
                         ?.takeIf { it.isNotBlank() }
                 }.getOrNull()
+                val statsUrl = runCatching {
+                    JSONObject(text).optJSONObject("playbackTracking")
+                        ?.optJSONObject("videostatsPlaybackUrl")
+                        ?.optString("baseUrl")
+                        ?.takeIf { it.isNotBlank() }
+                }.getOrNull()
                 val response = json.decodeFromString<PlayerResponse>(text)
                 if (response.playabilityStatus.status != "OK") {
                     lastProblem = response.playabilityStatus.reason ?: response.playabilityStatus.status
@@ -127,6 +135,7 @@ object VideoStreams {
                     headers = headersFor(client),
                     client = client.clientName,
                     storyboardSpec = storyboard,
+                    statsUrl = statsUrl,
                 )
             } catch (e: CancellationException) {
                 throw e

@@ -1,6 +1,9 @@
 <resources>
     <style name="Theme.Counstar" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/counstar_background</item>
+        <!-- The system splash is just the background: Counstar's own intro plays the logo. -->
+        <item name="android:windowSplashScreenBackground">@color/counstar_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_blank</item>
     </style>
     <color name="counstar_background">#111318</color>
     <color name="counstar_icon_background">#0E1A2E</color>

@@ -19,7 +19,10 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import app.counstar.data.Feeds
 import app.counstar.data.VideoItem
+import com.metrolist.innertube.WebApi
+import com.metrolist.innertube.YouTube
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -138,12 +141,23 @@ object CounstarPlayer {
                     player.setMediaSource(mediaSource(it), startAt)
                     player.prepare()
                     player.play()
+                    if (!isRetry) markWatched(item.id, it.statsUrl)
                 }
                 .onFailure {
                     Timber.w(it, "Couldn't resolve %s", item.id)
                     error = "Couldn't play this video."
                 }
             loading = false
+        }
+    }
+
+    /** Adds the video to your YouTube watch history (signed in), like watching it on YouTube. */
+    private fun markWatched(videoId: String, statsUrl: String?) {
+        if (YouTube.cookie.isNullOrBlank()) return
+        scope.launch {
+            withContext(Dispatchers.IO) { WebApi.markWatched(videoId, statsUrl) }
+                .onSuccess { Feeds.history.load(force = true) }
+                .onFailure { Timber.w(it, "Couldn't add %s to history", videoId) }
         }
     }
 

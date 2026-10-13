@@ -17,6 +17,8 @@ data class VideoItem(
     val isLive: Boolean = false,
     /** How much of it you've watched, 0..1, when YouTube says. */
     val watched: Float? = null,
+    /** The heading YouTube files it under on a list page ("Today", "Yesterday"), if any. */
+    val section: String? = null,
 ) {
     /** A sharp (1280×720) thumbnail; very old videos lack it, so fall back to [thumbnail]. */
     val hdThumbnail: String get() = "https://i.ytimg.com/vi/$id/hq720.jpg"
@@ -43,12 +45,38 @@ data class Comment(
     val likes: String?,
     val replies: String?,
     val byCreator: Boolean,
+    val verified: Boolean = false,
+    /** Loads this comment's replies. */
+    val repliesToken: String? = null,
+    val liked: Boolean = false,
+    val disliked: Boolean = false,
+    /** What to send to like, unlike, dislike and undislike it (signed in only). */
+    val likeAction: String? = null,
+    val unlikeAction: String? = null,
+    val dislikeAction: String? = null,
+    val undislikeAction: String? = null,
+    /** The creator hearted it. */
+    val hearted: Boolean = false,
 )
 
 data class CommentsPage(val count: String?, val comments: List<Comment>, val continuation: String?)
 
-/** A reason on YouTube's report form, and what to send to report for it. */
-data class ReportReason(val title: String, val params: String)
+/** A playlist (or album, course, podcast) in your library. */
+data class Playlist(
+    val id: String,
+    val title: String,
+    val thumbnail: String?,
+    /** "Private · Playlist", "Album · Artist". */
+    val subtitle: String?,
+    /** "24 videos". */
+    val count: String?,
+    val kind: Kind,
+) {
+    enum class Kind(val title: String) { Playlist("Playlists"), Music("Music"), Course("Courses"), Podcast("Podcasts") }
+}
+
+/** Who's signed in, as YouTube shows it. */
+data class Account(val name: String?, val handle: String?, val photo: String?)
 
 /** One entry in the notifications inbox. */
 data class Notification(
@@ -82,8 +110,10 @@ data class WatchInfo(
     val heatmap: List<Float>,
     /** Loads the first page of comments. */
     val commentsToken: String?,
-    /** Opens YouTube's report form for this video. */
-    val reportParams: String?,
+    /** "2.4M". */
+    val commentCount: String?,
+    /** Comment orders ("Top", "Newest") and the token that loads each. */
+    val commentSorts: List<Chip>,
     val related: List<VideoItem>,
 )
 
@@ -131,7 +161,23 @@ object YouTubeParser {
                     (value as? JSONObject)?.optString("token")?.takeIf { it.isNotBlank() }?.let { continuation = it }
             }
         }
-        return FeedPage(found.values.toList(), continuation, chips)
+        // History and similar pages file videos under dated headings ("Today", "Yesterday").
+        val sections = HashMap<String, String>()
+        walk(root) { key, value ->
+            if (key != "itemSectionRenderer" || value !is JSONObject) return@walk
+            val title = value.optJSONObject("header")?.let { h -> text(findFirst(h, "title")) } ?: return@walk
+            walk(value.optJSONArray("contents")) { k, v ->
+                if (v !is JSONObject) return@walk
+                val id = when (k) {
+                    "videoRenderer", "compactVideoRenderer" -> v.optString("videoId")
+                    "lockupViewModel" -> v.optString("contentId")
+                    else -> null
+                }
+                if (!id.isNullOrBlank()) sections.putIfAbsent(id, title)
+            }
+        }
+        val items = if (sections.isEmpty()) found.values.toList() else found.values.map { it.copy(section = sections[it.id]) }
+        return FeedPage(items, continuation, chips)
     }
 
     fun watch(json: String): WatchInfo {
@@ -149,6 +195,7 @@ object YouTubeParser {
         val subscribeButton = findFirst(secondary?.optJSONObject("subscribeButton"), "subscribeButtonRenderer")
         val subscribedState = findFirst(secondary?.optJSONObject("subscribeButton"), "subscribeButtonViewModel")
         val related = results?.optJSONObject("secondaryResults")?.let { feed(it.toString()).items }.orEmpty()
+        val commentsPanel = commentsPanel(root)
         return WatchInfo(
             title = text(primary?.optJSONObject("title")).orEmpty(),
             views = primary?.optJSONObject("viewCount")?.optJSONObject("videoViewCountRenderer")?.let {
@@ -181,38 +228,64 @@ object YouTubeParser {
                 }
                 token
             },
-            reportParams = primary?.toString()?.let { Regex("PAabuse_report\"\\},\"globalConfiguration\":\\{\"params\":\"([^\"]+)").find(it)?.groupValues?.get(1) },
+            commentCount = commentsPanel?.let { findFirst(it, "engagementPanelTitleHeaderRenderer") }?.let { text(it.optJSONObject("contextualInfo")) },
+            commentSorts = commentsPanel?.let { findFirst(it, "sortFilterSubMenuRenderer") }?.optJSONArray("subMenuItems")?.let { items ->
+                (0 until items.length()).mapNotNull { i ->
+                    val item = items.optJSONObject(i) ?: return@mapNotNull null
+                    val title = item.optString("title").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    Chip(title, findFirst(item, "continuationCommand")?.optString("token"), item.optBoolean("selected"))
+                }
+            }.orEmpty(),
             related = related,
         )
     }
 
-    /** A page of comments: new-style entity payloads, or old commentRenderers. */
-    fun comments(json: String): CommentsPage {
+    /** The comments engagement panel of a watch page: its count and sort menu. */
+    private fun commentsPanel(root: JSONObject): JSONObject? {
+        val panels = root.optJSONArray("engagementPanels") ?: return null
+        for (i in 0 until panels.length()) {
+            val panel = panels.optJSONObject(i)?.optJSONObject("engagementPanelSectionListRenderer") ?: continue
+            if ("comments" in panel.optString("panelIdentifier") || "comments" in panel.optString("targetId")) return panel
+        }
+        return null
+    }
+
+    /**
+     * A page of comments (or, with [replies], of one comment's replies): new-style entity
+     * payloads tied together by keys, or old commentRenderers.
+     */
+    fun comments(json: String, replies: Boolean = false): CommentsPage {
         val root = JSONObject(json)
-        val list = mutableListOf<Comment>()
+        val entities = mutableListOf<JSONObject>()
+        val old = mutableListOf<Comment>()
+        val surfaceKeys = HashMap<String, String>()
+        val stateKeys = HashMap<String, String>()
+        val surfaces = HashMap<String, JSONObject>()
+        val states = HashMap<String, JSONObject>()
+        val replyTokens = HashMap<String, String>()
         var count: String? = null
         var continuation: String? = null
         walk(root) { key, value ->
             if (value !is JSONObject) return@walk
             when (key) {
-                "commentsHeaderRenderer" -> count = text(value.optJSONObject("countText"))
-                "commentEntityPayload" -> {
-                    val props = value.optJSONObject("properties") ?: return@walk
-                    if (props.optInt("replyLevel") > 0) return@walk
-                    val author = value.optJSONObject("author")
-                    val toolbar = value.optJSONObject("toolbar")
-                    list += Comment(
-                        id = props.optString("commentId"),
-                        author = author?.optString("displayName").orEmpty(),
-                        avatar = author?.optString("avatarThumbnailUrl")?.takeIf { it.isNotBlank() }?.let(::fixUrl),
-                        text = props.optJSONObject("content")?.optString("content").orEmpty(),
-                        time = props.optString("publishedTime").takeIf { it.isNotBlank() },
-                        likes = toolbar?.optString("likeCountNotliked")?.takeIf { it.isNotBlank() && it != "0" },
-                        replies = toolbar?.optString("replyCount")?.takeIf { it.isNotBlank() && it != "0" },
-                        byCreator = author?.optBoolean("isCreator") == true,
-                    )
+                "commentsHeaderRenderer" -> text(value.optJSONObject("countText"))?.let { count = it }
+                "commentEntityPayload" -> entities += value
+                "commentViewModel" -> value.optString("commentId").takeIf { it.isNotBlank() }?.let { id ->
+                    value.optString("toolbarSurfaceKey").takeIf { it.isNotBlank() }?.let { surfaceKeys[id] = it }
+                    value.optString("toolbarStateKey").takeIf { it.isNotBlank() }?.let { stateKeys[id] = it }
                 }
-                "commentRenderer" -> list += Comment(
+                "engagementToolbarSurfaceEntityPayload" -> surfaces[value.optString("key")] = value
+                "engagementToolbarStateEntityPayload" -> states[value.optString("key")] = value
+                "commentThreadRenderer" -> {
+                    // YouTube nests it: {"commentViewModel": {"commentViewModel": {"commentId": ...}}}.
+                    val id = findFirst(value, "commentViewModel")?.let { it.optJSONObject("commentViewModel") ?: it }
+                        ?.optString("commentId")?.takeIf { it.isNotBlank() }
+                        ?: findFirst(value, "commentRenderer")?.optString("commentId")
+                    val token = value.optJSONObject("replies")?.optJSONObject("commentRepliesRenderer")
+                        ?.let { findFirst(it, "continuationCommand") }?.optString("token")
+                    if (!id.isNullOrBlank() && !token.isNullOrBlank()) replyTokens[id] = token
+                }
+                "commentRenderer" -> old += Comment(
                     id = value.optString("commentId"),
                     author = text(value.optJSONObject("authorText")).orEmpty(),
                     avatar = bestThumbnail(value.optJSONObject("authorThumbnail")),
@@ -225,24 +298,104 @@ object YouTubeParser {
                 "continuationItemRenderer" -> findFirst(value, "continuationCommand")?.optString("token")?.let { continuation = it }
             }
         }
-        return CommentsPage(count, list.distinctBy { it.id }, continuation)
+        fun action(surface: JSONObject?, command: String) = surface?.optJSONObject(command)
+            ?.let { findFirst(it, "performCommentActionEndpoint") }?.optString("action")?.takeIf { it.isNotBlank() }
+        val list = entities.mapNotNull { value ->
+            val props = value.optJSONObject("properties") ?: return@mapNotNull null
+            if ((props.optInt("replyLevel") > 0) != replies) return@mapNotNull null
+            val id = props.optString("commentId")
+            val author = value.optJSONObject("author")
+            val toolbar = value.optJSONObject("toolbar")
+            val surface = surfaceKeys[id]?.let(surfaces::get)
+            val state = (stateKeys[id] ?: props.optString("toolbarStateKey")).let(states::get)
+            val likeState = state?.optString("likeState").orEmpty()
+            Comment(
+                id = id,
+                author = author?.optString("displayName").orEmpty(),
+                avatar = author?.optString("avatarThumbnailUrl")?.takeIf { it.isNotBlank() }?.let(::fixUrl),
+                text = props.optJSONObject("content")?.optString("content").orEmpty(),
+                time = props.optString("publishedTime").takeIf { it.isNotBlank() },
+                likes = toolbar?.optString(if (likeState == "TOOLBAR_LIKE_STATE_LIKED") "likeCountLiked" else "likeCountNotliked")
+                    ?.takeIf { it.isNotBlank() && it != "0" },
+                replies = toolbar?.optString("replyCount")?.takeIf { it.isNotBlank() && it != "0" },
+                byCreator = author?.optBoolean("isCreator") == true,
+                verified = author?.optBoolean("isVerified") == true,
+                repliesToken = replyTokens[id],
+                liked = likeState == "TOOLBAR_LIKE_STATE_LIKED",
+                disliked = likeState == "TOOLBAR_LIKE_STATE_DISLIKED",
+                likeAction = action(surface, "likeCommand"),
+                unlikeAction = action(surface, "unlikeCommand"),
+                dislikeAction = action(surface, "dislikeCommand"),
+                undislikeAction = action(surface, "undislikeCommand"),
+                hearted = state?.optString("heartState") == "TOOLBAR_HEART_STATE_HEARTED",
+            )
+        }
+        val all = (list + old.map { it.copy(repliesToken = replyTokens[it.id]) }).distinctBy { it.id }
+        return CommentsPage(count, all, continuation)
     }
 
-    /** The reasons on a report form (best effort: YouTube's form changes shape often). */
-    fun reportReasons(json: String): List<ReportReason> {
-        val reasons = mutableListOf<ReportReason>()
-        walk(JSONObject(json)) { _, value ->
+    /** Playlists, albums, courses and podcasts on a library page, in the order YouTube lists them. */
+    fun playlists(json: String): Pair<List<Playlist>, String?> {
+        val found = LinkedHashMap<String, Playlist>()
+        var continuation: String? = null
+        walk(JSONObject(json)) { key, value ->
             if (value !is JSONObject) return@walk
-            val title = value.optJSONObject("title")?.optString("content")?.takeIf { it.isNotBlank() }
-                ?: text(value.optJSONObject("text"))
-                ?: value.optString("label").takeIf { it.isNotBlank() }
-                ?: return@walk
-            val params = listOf("flagEndpoint", "reportEndpoint", "submitReportEndpoint", "flagAction")
-                .firstNotNullOfOrNull { findFirst(value, it)?.optString("params")?.takeIf { p -> p.isNotBlank() } }
-                ?: return@walk
-            reasons += ReportReason(title, params)
+            when (key) {
+                "lockupViewModel" -> playlistLockup(value)?.let { found.putIfAbsent(it.id, it) }
+                "gridPlaylistRenderer", "playlistRenderer" -> {
+                    val id = value.optString("playlistId").takeIf { it.isNotBlank() } ?: return@walk
+                    val title = text(value.optJSONObject("title")) ?: return@walk
+                    val count = text(value.optJSONObject("videoCountShortText")) ?: text(value.optJSONObject("videoCountText"))
+                    val thumb = bestThumbnail(value.optJSONObject("thumbnail"))
+                        ?: value.optJSONArray("thumbnails")?.optJSONObject(0)?.let(::bestThumbnail)
+                    val byline = text(value.optJSONObject("shortBylineText"))
+                    found.putIfAbsent(id, Playlist(id, title, thumb, byline, count, kindOf(id, byline.orEmpty(), title)))
+                }
+                "continuationCommand" -> value.optString("token").takeIf { it.isNotBlank() }?.let { continuation = it }
+            }
         }
-        return reasons.distinctBy { it.params }
+        return found.values.toList() to continuation
+    }
+
+    private fun playlistLockup(l: JSONObject): Playlist? {
+        val type = l.optString("contentType")
+        if (type == "LOCKUP_CONTENT_TYPE_VIDEO" || type.isBlank()) return null
+        val id = l.optString("contentId").takeIf { it.isNotBlank() } ?: return null
+        val meta = l.optJSONObject("metadata")?.optJSONObject("lockupMetadataViewModel") ?: return null
+        val title = meta.optJSONObject("title")?.optString("content")?.takeIf { it.isNotBlank() } ?: return null
+        val rows = findFirst(meta.optJSONObject("metadata"), "contentMetadataViewModel")?.optJSONArray("metadataRows")
+        val parts = mutableListOf<String>()
+        if (rows != null) for (r in 0 until rows.length()) {
+            val ps = rows.optJSONObject(r)?.optJSONArray("metadataParts") ?: continue
+            for (i in 0 until ps.length()) {
+                ps.optJSONObject(i)?.optJSONObject("text")?.optString("content")?.takeIf { it.isNotBlank() }?.let(parts::add)
+            }
+        }
+        val image = l.optJSONObject("contentImage")
+        val count = findFirst(image, "thumbnailBadgeViewModel")?.optString("text")?.takeIf { it.isNotBlank() }
+        val subtitle = parts.filterNot { it.startsWith("View full") }.joinToString(" · ").takeIf { it.isNotBlank() }
+        return Playlist(id, title, findFirst(image, "image")?.let(::bestSource), subtitle, count, kindOf(id, type + " " + parts.joinToString(" "), title))
+    }
+
+    private fun kindOf(id: String, info: String, title: String): Playlist.Kind {
+        val text = "$info $title".lowercase()
+        return when {
+            "podcast" in text -> Playlist.Kind.Podcast
+            "course" in text -> Playlist.Kind.Course
+            id.startsWith("OLAK5uy_") || id.startsWith("RDCLAK") || "album" in text || "youtube music" in text ||
+                "single" in text -> Playlist.Kind.Music
+            else -> Playlist.Kind.Playlist
+        }
+    }
+
+    /** The signed-in account from account/account_menu. */
+    fun account(json: String): Account {
+        val header = findFirst(JSONObject(json), "activeAccountHeaderRenderer")
+        return Account(
+            name = text(header?.optJSONObject("accountName")),
+            handle = text(header?.optJSONObject("channelHandle")),
+            photo = bestThumbnail(header?.optJSONObject("accountPhoto")),
+        )
     }
 
     fun notifications(json: String): List<Notification> {

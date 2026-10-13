@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Subscriptions
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Search
@@ -66,6 +67,9 @@ fun TopBar(tab: Tab) {
             )
         }
         IconButton(onClick = { Nav.notificationsOpen = true }) { Icon(Icons.Outlined.Notifications, contentDescription = "Notifications") }
+        if (tab == Tab.You) {
+            IconButton(onClick = { Nav.settingsOpen = true }) { Icon(Icons.Outlined.Settings, contentDescription = "Settings") }
+        }
         IconButton(onClick = { Nav.searchOpen = true }) { Icon(Icons.Rounded.Search, contentDescription = "Search") }
     }
 }
@@ -118,7 +122,7 @@ fun BottomBar(session: Session, bottomInset: Dp) {
         Modifier.fillMaxWidth().height(BottomBarHeight + bottomInset).padding(bottom = bottomInset),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val searching = Nav.searchOpen || Nav.notificationsOpen
+        val searching = Nav.overlay
         BarItem("Home", Nav.tab == Tab.Home && !searching, Modifier.weight(1f), onClick = { Nav.goTo(Tab.Home) }) { on ->
             Icon(if (on) Icons.Rounded.Home else Icons.Outlined.Home, contentDescription = null, modifier = Modifier.size(25.dp))
         }

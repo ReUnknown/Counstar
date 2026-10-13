@@ -82,6 +82,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.compose.modifiers.resizeWithContentScale
 import androidx.media3.ui.compose.state.rememberPresentationState
+import app.counstar.data.Settings
 import app.counstar.playback.CounstarPlayer
 import app.counstar.playback.Storyboard
 import app.counstar.ui.components.BlurredImage
@@ -176,6 +177,7 @@ fun VideoSurface(modifier: Modifier = Modifier, contentScale: ContentScale = Con
  */
 @Composable
 fun AmbientLight(fallback: String?, modifier: Modifier = Modifier, strength: Float = 0.85f, blur: Dp = 36.dp) {
+    if (!Settings.ambientGlow) return
     val frame = Ambient.frame
     var previous by remember { mutableStateOf<ImageBitmap?>(null) }
     var shown by remember { mutableStateOf<ImageBitmap?>(null) }
@@ -330,6 +332,8 @@ private fun SeekBar(state: PlaybackState, heatmap: List<Float>, onScrub: (Long?)
     val scope = rememberCoroutineScope()
     var dragging by remember { mutableStateOf(false) }
     var fraction by remember { mutableFloatStateOf(0f) }
+    // Silent while scrubbing, like YouTube: the video holds still and picks up again once you let go.
+    var resumeAfter by remember { mutableStateOf(false) }
     val duration = state.duration.coerceAtLeast(1L)
     val shown = if (dragging) fraction else state.position.toFloat() / duration
     val buffered = state.buffered.toFloat() / duration
@@ -352,12 +356,15 @@ private fun SeekBar(state: PlaybackState, heatmap: List<Float>, onScrub: (Long?)
                     .pointerInput(duration) {
                         detectHorizontalDragGestures(
                             onDragStart = { offset ->
+                                resumeAfter = player.isPlaying || player.playWhenReady
+                                player.pause()
                                 dragging = true
                                 fraction = (offset.x / size.width).coerceIn(0f, 1f)
                                 onScrub((fraction * duration).toLong())
                             },
                             onDragEnd = {
                                 player.seekTo((fraction * duration).toLong())
+                                if (resumeAfter) player.play()
                                 scope.launch {
                                     delay(120)
                                     dragging = false
@@ -365,6 +372,7 @@ private fun SeekBar(state: PlaybackState, heatmap: List<Float>, onScrub: (Long?)
                                 }
                             },
                             onDragCancel = {
+                                if (resumeAfter) player.play()
                                 dragging = false
                                 onScrub(null)
                             },

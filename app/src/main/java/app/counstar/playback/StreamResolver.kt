@@ -41,6 +41,7 @@ class VideoStream(
     val chunkSize: Long,
     val height: Int?,
     val storyboardSpec: String? = null,
+    val statsUrl: String? = null,
 ) {
     /** An HLS manifest: picture and sound together, which the player streams as one. */
     val isHls: Boolean get() = videoUrl == audioUrl || "/manifest/hls" in videoUrl || ".m3u8" in videoUrl
@@ -49,7 +50,8 @@ class VideoStream(
 /** The only way Counstar turns a video ID into something playable, through InnerTubeX. */
 object StreamResolver {
     private const val TAG = "CounstarStreams"
-    private const val MAX_HEIGHT = 1080
+    /** The highest quality to stream, from Settings. */
+    private val MAX_HEIGHT get() = app.counstar.data.Settings.maxHeight
 
     @Volatile private var applicationContext: Context? = null
     @Volatile private var currentBundle: Bundle? = null
@@ -103,6 +105,7 @@ object StreamResolver {
             chunkSize = 0L,
             height = stream.height,
             storyboardSpec = stream.storyboardSpec,
+            statsUrl = stream.statsUrl,
         )
     }
 
