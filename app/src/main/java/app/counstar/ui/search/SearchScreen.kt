@@ -1,5 +1,8 @@
 package app.counstar.ui.search
 
+import app.counstar.data.FeedEntry
+import app.counstar.data.mix
+
 import androidx.activity.compose.BackHandler
 import app.counstar.ui.components.blockTouches
 import androidx.compose.foundation.background
@@ -115,9 +118,18 @@ fun SearchScreen(bottomPadding: androidx.compose.ui.unit.Dp) {
             modifier = Modifier.fillMaxSize(),
         ) {
             if (feed != null) {
-                // Channels that match come first, as cards in their own colors.
-                items(feed.channels.take(3), key = { "c" + it.id }) { channel -> app.counstar.ui.channel.ChannelResult(channel) }
-                items(feed.items, key = { it.id }) { item -> VideoCard(item, onClick = { Nav.watch(item) }) }
+                // The channel you're most likely after, big in its own colors, when YouTube puts
+                // one first. Its other channels (MrBeast Gaming...) follow as rows, where YouTube
+                // puts them among the videos.
+                val top = feed.channels.firstOrNull()?.takeIf { it.after == 0 }
+                if (top != null) item(key = "top") { app.counstar.ui.channel.ChannelResult(top) }
+                items(mix(feed.items, emptyList(), feed.channels.filter { it.id != top?.id }), key = { it.key }) { e ->
+                    when (e) {
+                        is FeedEntry.Video -> VideoCard(e.item, onClick = { Nav.watch(e.item) })
+                        is FeedEntry.Channel -> app.counstar.ui.channel.ChannelRow(e.channel)
+                        is FeedEntry.PostEntry -> app.counstar.ui.posts.PostCard(e.post)
+                    }
+                }
                 if (feed.loading) {
                     item { Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { LoadingIndicator(Modifier.size(56.dp)) } }
                 } else if (feed.canLoadMore) {

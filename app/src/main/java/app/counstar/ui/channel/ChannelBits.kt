@@ -56,20 +56,21 @@ import coil3.compose.AsyncImage
 
 /**
  * The whole banner image, not the thin strip YouTube crops for desktop: the same picture
- * asked for uncropped (16:9), so there's real banner above and below the usual strip.
+ * asked for uncropped (16:9, the TV banner), so there's real banner above and below the strip.
+ * Old banners that were never that size come back as they are, and get cropped to fit.
  */
 fun fullBanner(url: String): String {
     if ("googleusercontent.com" !in url && "ggpht.com" !in url) return url
-    return url.substringBefore('=') + "=w1440-fcrop64=1,00000000ffffffff-k-c0xffffffff-no-nd-rj"
+    return url.substringBefore('=') + "=w1920-fcrop64=1,00000000ffffffff-k-c0xffffffff-no-nd-rj"
 }
 
 /**
- * A channel's banner across the top of a page, edge to edge: the usual strip plus a little
- * more of the real banner above and below it, fading into the page at the bottom. Nothing is
- * stretched or made up.
+ * A channel's banner: the usual strip plus more of the real banner above and below it, cropped
+ * to [aspect]. On a card ([shape]) it sits whole; edge to edge it fades into the page at the
+ * bottom. Nothing is stretched or made up.
  */
 @Composable
-fun ChannelBanner(banner: String, modifier: Modifier = Modifier, aspect: Float = 3.4f) {
+fun ChannelBanner(banner: String, modifier: Modifier = Modifier, aspect: Float = 3.4f, shape: androidx.compose.ui.graphics.Shape? = null) {
     AsyncImage(
         fullBanner(banner),
         contentDescription = null,
@@ -77,12 +78,55 @@ fun ChannelBanner(banner: String, modifier: Modifier = Modifier, aspect: Float =
         modifier = modifier
             .fillMaxWidth()
             .aspectRatio(aspect)
-            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-            .drawWithContent {
-                drawContent()
-                drawRect(Brush.verticalGradient(0.55f to Color.Black, 1f to Color.Transparent), blendMode = BlendMode.DstIn)
-            },
+            .then(
+                if (shape != null) {
+                    Modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceContainer)
+                } else {
+                    Modifier
+                        .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                        .drawWithContent {
+                            drawContent()
+                            drawRect(Brush.verticalGradient(0.55f to Color.Black, 1f to Color.Transparent), blendMode = BlendMode.DstIn)
+                        }
+                },
+            ),
     )
+}
+
+/**
+ * Another channel in search results, the way YouTube lists them further down: picture, name,
+ * handle and subscribers, and Subscribe, in the channel's colors.
+ */
+@Composable
+fun ChannelRow(channel: app.counstar.data.ChannelItem) {
+    val page = remember(channel.id) { Channels.page(channel.id) }
+    LaunchedEffect(page) { page.load() }
+    val info = page.info
+    MaterialTheme(colorScheme = rememberArtColorScheme(channel.avatar)) {
+        val colors = MaterialTheme.colorScheme
+        androidx.compose.foundation.layout.Row(
+            Modifier
+                .padding(horizontal = 12.dp)
+                .fillMaxWidth()
+                .pressable(RoundedCornerShape(24.dp), color = colors.surfaceContainer, pressedScale = 0.98f) { Nav.openChannel(channel.id) }
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Avatar(channel.avatar, 56.dp, modifier = Modifier.border(2.dp, colors.primary, CircleShape).padding(3.dp))
+            Column(Modifier.weight(1f)) {
+                Text(channel.title, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.onSurface)
+                Text(
+                    listOfNotNull(channel.handle ?: info?.handle, channel.subscribers ?: info?.subscribers).joinToString(" · "),
+                    fontSize = 13.sp,
+                    color = colors.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            SubscribeButton(channel.id, info?.subscribed ?: false, info?.bellOptions.orEmpty(), accent = colors.primary, onAccent = colors.onPrimary)
+        }
+    }
 }
 
 /** Which channel's preview card is up (tapped from a comment or an @mention). */
@@ -158,22 +202,36 @@ fun AboutSheet(page: app.counstar.data.ChannelPage, onDismiss: () -> Unit) {
     val about = page.about
     val colors = MaterialTheme.colorScheme
     val context = androidx.compose.ui.platform.LocalContext.current
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = colors.surfaceContainerLow) {
+    // The page's own colors: its background, its accent for headings and links.
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = colors.background,
+        contentColor = colors.onBackground,
+    ) {
         androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 20.dp, end = 20.dp, bottom = 32.dp)) {
-            item { Text(info?.title ?: "About", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.6).sp, modifier = Modifier.padding(bottom = 12.dp)) }
+            item {
+                androidx.compose.foundation.layout.Row(Modifier.padding(bottom = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Avatar(info?.avatar, 52.dp, modifier = Modifier.border(2.dp, colors.primary, CircleShape).padding(3.dp))
+                    Column {
+                        Text(info?.title ?: "About", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.6).sp, color = colors.onBackground)
+                        info?.handle?.let { Text(it, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.primary) }
+                    }
+                }
+            }
             item {
                 Text(
                     about?.description ?: info?.description ?: "",
                     fontSize = 14.sp,
                     lineHeight = 20.sp,
-                    color = colors.onSurface,
+                    color = colors.onBackground,
                 )
             }
             if (about == null && info?.aboutToken != null) {
                 item { Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { LoadingIndicator(Modifier.size(40.dp)) } }
             }
             if (about != null && about.links.isNotEmpty()) {
-                item { Text("Links", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(top = 22.dp, bottom = 8.dp)) }
+                item { Text("Links", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = colors.primary, modifier = Modifier.padding(top = 22.dp, bottom = 8.dp)) }
                 items(about.links.size) { i ->
                     val (title, url) = about.links[i]
                     Column(
@@ -185,7 +243,7 @@ fun AboutSheet(page: app.counstar.data.ChannelPage, onDismiss: () -> Unit) {
                             .padding(vertical = 8.dp, horizontal = 4.dp),
                     ) {
                         Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                        Text(url.removePrefix("https://").removePrefix("http://").removePrefix("www."), fontSize = 13.sp, color = if (app.counstar.ui.theme.isCounstarDark()) Color(0xFF3EA6FF) else Color(0xFF065FD4), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(url.removePrefix("https://").removePrefix("http://").removePrefix("www."), fontSize = 13.sp, color = colors.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -198,7 +256,7 @@ fun AboutSheet(page: app.counstar.data.ChannelPage, onDismiss: () -> Unit) {
                 about?.country?.let { "Country" to it },
             )
             if (facts.isNotEmpty()) {
-                item { Text("More info", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(top = 22.dp, bottom = 8.dp)) }
+                item { Text("More info", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = colors.primary, modifier = Modifier.padding(top = 22.dp, bottom = 8.dp)) }
                 items(facts.size) { i ->
                     val (label, value) = facts[i]
                     Row(Modifier.fillMaxWidth().padding(vertical = 7.dp)) {

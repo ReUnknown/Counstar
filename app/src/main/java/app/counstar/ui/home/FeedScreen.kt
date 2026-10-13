@@ -2,6 +2,9 @@ package app.counstar.ui.home
 
 import android.content.Context
 import android.widget.Toast
+import app.counstar.data.FeedEntry
+import app.counstar.data.mix
+import app.counstar.ui.posts.PostCard
 import androidx.compose.ui.platform.LocalContext
 
 import androidx.compose.foundation.layout.Arrangement
@@ -110,8 +113,13 @@ fun FeedScreen(
             verticalArrangement = Arrangement.spacedBy(24.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            items(feed.items, key = { it.id }) { item ->
-                VideoCard(item, onClick = { Nav.watch(item) }, modifier = Modifier.animateItem())
+            // Videos, with creators' posts where YouTube puts them.
+            items(mix(feed.items, feed.posts), key = { it.key }) { e ->
+                when (e) {
+                    is FeedEntry.Video -> VideoCard(e.item, onClick = { Nav.watch(e.item) }, modifier = Modifier.animateItem())
+                    is FeedEntry.PostEntry -> PostCard(e.post, modifier = Modifier.animateItem())
+                    is FeedEntry.Channel -> {}
+                }
             }
             when {
                 feed.error != null && feed.items.isEmpty() -> item(key = "error") {

@@ -62,6 +62,11 @@ import androidx.compose.ui.unit.sp
 import app.counstar.data.ChannelInfo
 import app.counstar.data.Channels
 import app.counstar.data.Feed
+import app.counstar.data.FeedEntry
+import app.counstar.data.SortedFeed
+import app.counstar.data.mix
+import app.counstar.ui.ChipButton
+import app.counstar.ui.posts.PostCard
 import app.counstar.ui.Nav
 import app.counstar.ui.components.Avatar
 import app.counstar.ui.components.BlurredImage
@@ -73,12 +78,13 @@ import app.counstar.ui.components.rememberArtColorScheme
 import app.counstar.ui.watch.SubscribeButton
 import app.counstar.ui.you.PlaylistRow
 
-private val tabs = listOf("Home", "Videos", "Live", "Playlists")
+private val tabs = listOf("Home", "Videos", "Live", "Posts", "Playlists")
 
 /**
- * A channel's page, in the channel's own colors: its banner big at the top, blurring and
- * fading into the page; the avatar ringed in the channel's color; name, handle, subscribers;
- * Subscribe; then Home, Videos, Live and Playlists.
+ * A channel's page, in the channel's own colors: its banner big near the top (the TV-size
+ * picture, on a rounded card clear of the camera); the avatar ringed in the channel's color;
+ * name, handle, subscribers; Subscribe; then Home, Videos, Live, Posts and Playlists. Videos and
+ * Live sort by Latest, Popular or Oldest.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -91,23 +97,32 @@ fun ChannelScreen(channelId: String, bottomPadding: Dp) {
     var aboutOpen by remember { mutableStateOf(false) }
     // Only the tabs this channel has (YouTube lists just those), minus any that came back empty.
     val shownTabs = tabs.filter { t ->
-        val listed = info == null || info.tabs.isEmpty() || t in info.tabs
+        val listed = when (t) {
+            // Only once the page says how to load it.
+            "Posts" -> info != null && ("Posts" in info.tabParams || "Community" in info.tabParams)
+            else -> info == null || info.tabs.isEmpty() || t in info.tabs
+        }
         val empty = when (t) {
             "Home" -> page.home.loadedOnce && page.home.items.isEmpty()
-            "Live" -> page.live.loadedOnce && page.live.items.isEmpty()
+            "Live" -> page.live.feed.loadedOnce && page.live.feed.items.isEmpty() && page.live.selected == page.live.sorts.firstOrNull()?.title
+            "Posts" -> page.posts?.let { it.loadedOnce && it.posts.isEmpty() && it.items.isEmpty() } == true
             "Playlists" -> page.playlists?.isEmpty() == true
             else -> false
         }
         listed && !empty
     }.ifEmpty { listOf("Videos") }
     val tab = picked?.takeIf { it in shownTabs } ?: shownTabs.first()
-    val feed: Feed? = when (tab) {
-        "Home" -> page.home
+    val sorted: SortedFeed? = when (tab) {
         "Videos" -> page.videos
         "Live" -> page.live
         else -> null
     }
-    LaunchedEffect(tab) { if (feed != null) feed.load() else page.loadPlaylists() }
+    val feed: Feed? = when (tab) {
+        "Home" -> page.home
+        "Posts" -> page.posts
+        else -> sorted?.feed
+    }
+    LaunchedEffect(tab, feed) { if (feed != null) feed.load() else if (tab == "Playlists") page.loadPlaylists() }
 
     MaterialTheme(colorScheme = rememberArtColorScheme(info?.avatar)) {
         val colors = MaterialTheme.colorScheme
@@ -118,8 +133,16 @@ fun ChannelScreen(channelId: String, bottomPadding: Dp) {
             LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottomPadding)) {
                 item(key = "header") { Header(channelId, info, page.failed, onAbout = { aboutOpen = true }) }
                 item(key = "tabs") { Tabs(shownTabs, tab) { picked = it } }
+                if (sorted != null && sorted.sorts.size > 1) {
+                    item(key = "sorts") {
+                        Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            sorted.sorts.forEach { chip -> ChipButton(chip.title, sorted.selected == chip.title) { sorted.pick(chip) } }
+                        }
+                    }
+                }
                 when (tab) {
                     "Playlists" -> playlists(page.playlists)
+                    "Posts" -> feed?.let { posts(it) }
                     else -> feed?.let { videos(it, featured = tab == "Home", avatar = info?.avatar, name = info?.title) }
                 }
             }
@@ -130,7 +153,7 @@ fun ChannelScreen(channelId: String, bottomPadding: Dp) {
             val bar by androidx.compose.animation.core.animateFloatAsState(if (scrolled) 1f else 0f, label = "bar")
             Box(Modifier.fillMaxWidth().graphicsLayer { alpha = bar }.background(colors.background).statusBarsPadding().height(60.dp))
             Row(Modifier.statusBarsPadding().padding(horizontal = 4.dp, vertical = 4.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                GlassButton({ Nav.closeChannel() }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = Color.White) }
+                GlassButton({ Nav.closeChannel() }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back") }
                 Text(
                     info?.title.orEmpty(),
                     fontSize = 20.sp,
@@ -147,23 +170,25 @@ fun ChannelScreen(channelId: String, bottomPadding: Dp) {
                         putExtra(Intent.EXTRA_TEXT, "https://www.youtube.com/" + (info?.handle ?: "channel/$channelId"))
                     }
                     context.startActivity(Intent.createChooser(send, null))
-                }) { Icon(Icons.Rounded.Share, contentDescription = "Share channel", tint = Color.White) }
+                }) { Icon(Icons.Rounded.Share, contentDescription = "Share channel") }
             }
         }
     }
 }
 
+/** Back and share: tonal circles in the channel's colors, above the banner. */
 @Composable
 private fun GlassButton(onClick: () -> Unit, content: @Composable () -> Unit) {
     Box(
         Modifier
             .size(44.dp)
             .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.32f))
-            .border(1.dp, Color.White.copy(alpha = 0.16f), CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
-    ) { content() }
+    ) {
+        androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onSurface) { content() }
+    }
 }
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -171,9 +196,10 @@ private fun GlassButton(onClick: () -> Unit, content: @Composable () -> Unit) {
 private fun Header(channelId: String, info: ChannelInfo?, failed: Boolean, onAbout: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth()) {
-        // The banner, edge to edge under the status bar, fading into the page.
-        val banner = info?.banner
-        if (banner != null) ChannelBanner(banner) else Spacer(Modifier.statusBarsPadding().height(64.dp))
+        // Clear of the camera and the back / share row, then the banner big, on a rounded card:
+        // the TV-size picture, cropped to 2:1, so more of it shows than YouTube's thin strip.
+        Spacer(Modifier.statusBarsPadding().height(60.dp))
+        info?.banner?.let { ChannelBanner(it, Modifier.padding(start = 12.dp, end = 12.dp, bottom = 16.dp), aspect = 2f, shape = RoundedCornerShape(24.dp)) }
         Column(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -282,6 +308,27 @@ private fun LazyListScope.videos(feed: Feed, featured: Boolean, avatar: String?,
         }
         items.isEmpty() && feed.loadedOnce -> item(key = "empty") {
             Text("Nothing here yet.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(32.dp))
+        }
+    }
+}
+
+/** A channel's posts, newest first. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+private fun LazyListScope.posts(feed: Feed) {
+    item(key = "posts-top") { Spacer(Modifier.height(16.dp)) }
+    items(mix(feed.items, feed.posts), key = { it.key }) { e ->
+        when (e) {
+            is FeedEntry.PostEntry -> PostCard(e.post, modifier = Modifier.padding(bottom = 12.dp))
+            is FeedEntry.Video -> Column(Modifier.padding(bottom = 16.dp)) { VideoCard(e.item, onClick = { Nav.watch(e.item) }) }
+            is FeedEntry.Channel -> {}
+        }
+    }
+    when {
+        feed.loading -> item(key = "loading") {
+            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { LoadingIndicator(Modifier.size(48.dp)) }
+        }
+        feed.posts.isEmpty() && feed.items.isEmpty() && feed.loadedOnce -> item(key = "empty") {
+            Text("No posts yet.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(32.dp))
         }
     }
 }

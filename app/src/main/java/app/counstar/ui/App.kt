@@ -223,6 +223,7 @@ private fun Shell(session: Session) {
             if (Nav.allSubscriptionsOpen) AllSubscriptionsScreen(bottomPadding = bottom)
             Nav.channels.lastOrNull()?.let { id -> key(id) { ChannelScreen(id, bottomPadding = bottom) } }
             Nav.playlist?.let { PlaylistScreen(it, bottomPadding = bottom) }
+            Nav.post?.let { p -> key(p.id) { app.counstar.ui.posts.PostScreen(p, bottomPadding = bottom) } }
         }
 
         // Top: one even pane of frosted glass from the very top of the screen down to the
@@ -244,7 +245,7 @@ private fun Shell(session: Session) {
                 // The bar slides up under the status bar: keep its content out of the clock.
                 Box(Modifier.fillMaxWidth().height(statusBar).hazeEffect(haze, glass))
             }
-        } else if (Nav.playlist == null && Nav.channels.isEmpty()) {
+        } else if (Nav.playlist == null && Nav.channels.isEmpty() && Nav.post == null) {
             Box(Modifier.fillMaxWidth().height(statusBar).background(MaterialTheme.colorScheme.background))
         }
 

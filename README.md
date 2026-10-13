@@ -35,6 +35,8 @@ springy, physical motion.
 - Like and subscribe
 - Ambient glow on the watch page, taken live from the video
 - Up next with filters: everything, the same channel, or what you haven't watched
+- Creators' posts and polls: on channels, in your feed, with their comments
+- Channel pages with big banners, and videos sorted by latest, popular or oldest
 - Updates itself from GitHub releases
 
 ## Install

@@ -48,7 +48,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.counstar.data.ChannelItem
 import app.counstar.data.Channels
+import app.counstar.data.FeedEntry
 import app.counstar.data.Feeds
+import app.counstar.data.mix
+import app.counstar.ui.posts.PostCard
 import app.counstar.data.VideoItem
 import app.counstar.ui.ChipButton
 import app.counstar.ui.Nav
@@ -60,13 +63,14 @@ import app.counstar.ui.theme.YouTubeRed
 import app.counstar.ui.you.Page
 import kotlinx.coroutines.launch
 
-private enum class Filter(val title: String) { All("All"), Today("Today"), Videos("Videos"), Live("Live"), Continue("Continue watching"), Unwatched("Unwatched") }
+private enum class Filter(val title: String) { All("All"), Today("Today"), Videos("Videos"), Live("Live"), Posts("Posts"), Continue("Continue watching"), Unwatched("Unwatched") }
 
 private fun Filter.keeps(v: VideoItem): Boolean = when (this) {
     Filter.All -> true
     Filter.Today -> v.isLive || v.published?.let { p -> listOf("second", "minute", "hour").any { it in p } } == true
     Filter.Videos -> !v.isLive
     Filter.Live -> v.isLive
+    Filter.Posts -> false
     Filter.Continue -> v.watched != null && v.watched < 0.95f
     Filter.Unwatched -> v.watched == null
 }
@@ -95,7 +99,12 @@ fun SubscriptionsScreen(contentPadding: PaddingValues, refreshOffset: Dp) {
         .map { ChannelItem(it.channelId!!, it.channelName.orEmpty(), it.channelAvatar) to it.isLive }
     val rest = Channels.subscriptions.orEmpty().filter { c -> recent.none { it.first.id == c.id } }.map { it to false }
     val channels = (recent + rest).take(30)
-    val shown = feed.items.filter(filter::keeps)
+    // All: videos with the channels' posts among them; Posts: just those.
+    val shown = when (filter) {
+        Filter.All -> mix(feed.items, feed.posts)
+        Filter.Posts -> feed.posts.map { FeedEntry.PostEntry(it) }
+        else -> feed.items.filter(filter::keeps).map { FeedEntry.Video(it) }
+    }
 
     val refresh = rememberPullToRefreshState()
     PullToRefreshBox(
@@ -139,10 +148,16 @@ fun SubscriptionsScreen(contentPadding: PaddingValues, refreshOffset: Dp) {
             }
             item(key = "filters") {
                 LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(Filter.entries, key = { it.name }) { f -> ChipButton(f.title, filter == f) { filter = f } }
+                    items(Filter.entries.filter { it != Filter.Posts || feed.posts.isNotEmpty() }, key = { it.name }) { f -> ChipButton(f.title, filter == f) { filter = f } }
                 }
             }
-            items(shown, key = { it.id }) { v -> VideoCard(v, onClick = { Nav.watch(v) }, modifier = Modifier.animateItem()) }
+            items(shown, key = { it.key }) { e ->
+                when (e) {
+                    is FeedEntry.Video -> VideoCard(e.item, onClick = { Nav.watch(e.item) }, modifier = Modifier.animateItem())
+                    is FeedEntry.PostEntry -> PostCard(e.post, modifier = Modifier.animateItem())
+                    is FeedEntry.Channel -> {}
+                }
+            }
             when {
                 feed.loading -> item(key = "loading") {
                     Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { LoadingIndicator(Modifier.size(56.dp)) }

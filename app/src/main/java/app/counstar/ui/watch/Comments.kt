@@ -115,9 +115,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** A list of comments (or one comment's replies), a page at a time. */
+/**
+ * A list of comments (or one comment's replies), a page at a time. A video's come through
+ * "next"; a post's through "browse" ([browse]).
+ */
 @Stable
-class CommentList(firstToken: String?, private val replies: Boolean) {
+class CommentList(firstToken: String?, private val replies: Boolean, private val browse: Boolean = false) {
     var comments by mutableStateOf<List<Comment>>(emptyList())
         private set
     var loading by mutableStateOf(false)
@@ -167,7 +170,9 @@ class CommentList(firstToken: String?, private val replies: Boolean) {
         loading = true
         job = scope.launch {
             try {
-                withContext(Dispatchers.IO) { WebApi.nextContinuation(token).mapCatching { YouTubeParser.comments(it, replies) } }
+                withContext(Dispatchers.IO) {
+                    (if (browse) WebApi.browseContinuation(token) else WebApi.nextContinuation(token)).mapCatching { YouTubeParser.comments(it, replies) }
+                }
                     .onSuccess { page ->
                         page.count?.let { count = it }
                         page.createParams?.let { createParams = it }
@@ -186,10 +191,10 @@ class CommentList(firstToken: String?, private val replies: Boolean) {
     }
 }
 
-/** A video's comments: the list, its count, and the orders it can be sorted in. */
+/** A video's (or post's: [browse]) comments: the list, its count, and the orders it can be sorted in. */
 @Stable
-class CommentsState(firstToken: String, val sorts: List<Chip>, private val knownCount: String?) {
-    val list = CommentList(firstToken, replies = false)
+class CommentsState(firstToken: String, val sorts: List<Chip>, private val knownCount: String?, val browse: Boolean = false) {
+    val list = CommentList(firstToken, replies = false, browse = browse)
     var sort by mutableIntStateOf(0)
         private set
     val count: String? get() = knownCount ?: list.count?.removeSuffix(" Comments")?.removeSuffix(" comments")
@@ -294,7 +299,7 @@ fun CommentsPanel(state: CommentsState, onClose: () -> Unit, modifier: Modifier 
                     )
                 }
             } else {
-                Thread(open, onBack = { thread = null }, onClose = onClose)
+                Thread(open, browse = state.browse, onBack = { thread = null }, onClose = onClose)
             }
         }
     }
@@ -341,9 +346,9 @@ private fun depths(replies: List<Comment>): List<Int> {
 /** One comment's thread: the comment highlighted at the top, its replies nested below it. */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun Thread(parent: Comment, onBack: () -> Unit, onClose: () -> Unit) {
+private fun Thread(parent: Comment, browse: Boolean, onBack: () -> Unit, onClose: () -> Unit) {
     val colors = MaterialTheme.colorScheme
-    val replies = remember(parent.id) { CommentList(parent.repliesToken, replies = true) }
+    val replies = remember(parent.id) { CommentList(parent.repliesToken, replies = true, browse = browse) }
     var replyTo by remember(parent.id) { mutableStateOf<Comment?>(null) }
     LaunchedEffect(replies) { replies.start() }
     Column(Modifier.fillMaxSize()) {

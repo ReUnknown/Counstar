@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import app.counstar.data.Playlist
+import app.counstar.data.Post
 import app.counstar.data.VideoItem
 import app.counstar.playback.CounstarPlayer
 
@@ -23,15 +24,18 @@ object Nav {
     /** Every subscription, as a list. */
     var allSubscriptionsOpen by mutableStateOf(false)
     var watchOpen by mutableStateOf(false)
+    /** A creator's post, opened with its comments. */
+    var post by mutableStateOf<Post?>(null)
 
     /** Something full screen is open over the tab (not the watch page). */
-    val overlay: Boolean get() = searchOpen || notificationsOpen || historyOpen || playlist != null || channels.isNotEmpty() || allSubscriptionsOpen
+    val overlay: Boolean get() = searchOpen || notificationsOpen || historyOpen || playlist != null || channels.isNotEmpty() || allSubscriptionsOpen || post != null
 
     /** Opens a channel's page over everything (the video playing shrinks to the mini player). */
     fun openChannel(id: String?) {
         if (id.isNullOrBlank()) return
         watchOpen = false
         playlist = null
+        post = null
         if (channels.lastOrNull() != id) channels = channels + id
     }
 
@@ -46,12 +50,18 @@ object Nav {
         playlist = null
         channels = emptyList()
         allSubscriptionsOpen = false
+        post = null
         this.tab = tab
     }
 
     fun watch(item: VideoItem, startAtMs: Long = 0L) {
         CounstarPlayer.play(item, startAtMs)
         watchOpen = true
+    }
+
+    fun openPost(p: Post) {
+        watchOpen = false
+        post = p
     }
 
     fun reset() {

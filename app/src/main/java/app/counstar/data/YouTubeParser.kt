@@ -33,16 +33,66 @@ data class VideoItem(
 /** A filter chip above a feed ("All", "Music", ...): selecting it loads [token]. */
 data class Chip(val title: String, val token: String?, val selected: Boolean)
 
-/** One page of a feed, the token for the next page if there is one, the feed's chips, and channels in it (search). */
+/**
+ * One page of a feed, the token for the next page if there is one, the feed's chips, channels
+ * in it (search) and creators' posts (a channel's Posts tab, or mixed into home).
+ */
 data class FeedPage(
     val items: List<VideoItem>,
     val continuation: String?,
     val chips: List<Chip> = emptyList(),
     val channels: List<ChannelItem> = emptyList(),
+    val posts: List<Post> = emptyList(),
 )
 
-/** A channel as a search result or in your subscriptions. */
-data class ChannelItem(val id: String, val title: String, val avatar: String?, val handle: String? = null, val subscribers: String? = null)
+/**
+ * A channel as a search result or in your subscriptions. [after]: how many of the page's videos
+ * come before it (search shows channels where YouTube puts them).
+ */
+data class ChannelItem(val id: String, val title: String, val avatar: String?, val handle: String? = null, val subscribers: String? = null, val after: Int = 0)
+
+/** A creator's post: text, and maybe pictures, a poll or a video. [after] as in [ChannelItem]. */
+data class Post(
+    val id: String,
+    val channelId: String?,
+    val author: String,
+    val avatar: String?,
+    val text: String,
+    /** Links, @mentions and hashtags in [text]. */
+    val links: List<LinkRun>,
+    val time: String?,
+    val likes: String?,
+    val comments: String?,
+    /** Opens the post on its own, with its comments. */
+    val detailParams: String?,
+    val images: List<String>,
+    val video: VideoItem?,
+    val poll: Poll?,
+    val liked: Boolean,
+    /** What to send to like and unlike it (signed in only). */
+    val likeAction: String?,
+    val unlikeAction: String?,
+    val after: Int = 0,
+)
+
+/** A post's poll; [image] polls have a picture per choice. */
+data class Poll(val choices: List<PollChoice>, val total: String?, val image: Boolean)
+
+/**
+ * One answer. YouTube says what the results would be both ways ("if you pick this", "if you
+ * don't"), so they can show the moment you vote. Actions are signed in only.
+ */
+data class PollChoice(
+    val text: String,
+    val image: String?,
+    val selected: Boolean,
+    val percentIfSelected: String?,
+    val percentIfNot: String?,
+    val ratioIfSelected: Float?,
+    val ratioIfNot: Float?,
+    val selectAction: String?,
+    val deselectAction: String?,
+)
 
 /** A channel page's header. */
 data class ChannelInfo(
@@ -60,6 +110,8 @@ data class ChannelInfo(
     val tabs: List<String> = emptyList(),
     /** Loads the "About" panel. */
     val aboutToken: String? = null,
+    /** Each tab's params, to load it ("Posts" -> "EgVwb3N0c..."). */
+    val tabParams: Map<String, String> = emptyMap(),
 )
 
 /** A channel's About: its full description, links and figures. */
@@ -213,8 +265,11 @@ object YouTubeParser {
     /** Things whose insides hold nothing more to find (and whose tokens aren't the page's). */
     private val leaves = setOf(
         "videoRenderer", "compactVideoRenderer", "lockupViewModel", "chipCloudChipRenderer", "notificationRenderer",
-        "sortFilterSubMenuRenderer", "commentRepliesRenderer",
+        "sortFilterSubMenuRenderer", "commentRepliesRenderer", "chipViewModel",
+        "backstagePostThreadRenderer", "backstagePostRenderer", "postRenderer",
     )
+
+    private val postKeys = setOf("backstagePostThreadRenderer", "backstagePostRenderer", "postRenderer")
 
     fun feed(json: String): FeedPage {
         val root = JSONObject(json)
@@ -224,12 +279,19 @@ object YouTubeParser {
         val channels = LinkedHashMap<String, ChannelItem>()
         walk(root) { key, value ->
             when (key) {
-                "channelRenderer", "gridChannelRenderer" -> (value as? JSONObject)?.let(::channelRenderer)?.let { channels.putIfAbsent(it.id, it) }
+                "channelRenderer", "gridChannelRenderer" -> (value as? JSONObject)?.let(::channelRenderer)
+                    ?.let { channels.putIfAbsent(it.id, it.copy(after = found.size)) }
                 "chipCloudChipRenderer" -> (value as? JSONObject)?.let { chip ->
                     val title = text(chip.optJSONObject("text")) ?: return@let
                     // A shortcut to YouTube's feed editor, not a filter.
                     if ("custom feed" in title.lowercase() || title == "Shorts") return@let
                     chips += Chip(title, findFirst(chip, "continuationCommand")?.optString("token"), chip.optBoolean("isSelected"))
+                }
+                // Newer chips: a channel tab's Latest / Popular / Oldest.
+                "chipViewModel" -> (value as? JSONObject)?.let { chip ->
+                    val title = chip.optString("text").takeIf { it.isNotBlank() } ?: return@let
+                    if (title == "Shorts" || chips.any { it.title == title }) return@let
+                    chips += Chip(title, findFirst(chip, "continuationCommand")?.optString("token"), chip.optBoolean("selected"))
                 }
                 "videoRenderer", "compactVideoRenderer", "gridVideoRenderer", "playlistVideoRenderer" ->
                     (value as? JSONObject)?.let(::videoRenderer)?.let { found.putIfAbsent(it.id, it) }
@@ -255,7 +317,128 @@ object YouTubeParser {
             }
         }
         val items = if (sections.isEmpty()) found.values.toList() else found.values.map { it.copy(section = sections[it.id]) }
-        return FeedPage(items, continuation, chips, channels.values.toList())
+        return FeedPage(items, continuation, chips, channels.values.toList(), posts(root, found.keys))
+    }
+
+    /**
+     * Creators' posts in a page, each with how many of the page's [videos] come before it. Posts
+     * on home come in their own shelf ("Latest posts"), which the video walk skips.
+     */
+    private fun posts(root: JSONObject, videos: Set<String>): List<Post> {
+        val posts = LinkedHashMap<String, Post>()
+        val passed = HashSet<String>()
+        walk(root, skip - "richSectionRenderer") { key, value ->
+            if (value !is JSONObject) return@walk
+            when (key) {
+                "videoRenderer", "compactVideoRenderer", "gridVideoRenderer" -> value.optString("videoId").takeIf { it in videos }?.let(passed::add)
+                "lockupViewModel" -> value.optString("contentId").takeIf { it in videos }?.let(passed::add)
+                in postKeys -> {
+                    val p = if (key == "backstagePostThreadRenderer") findFirst(value, "backstagePostRenderer") ?: findFirst(value, "postRenderer") else value
+                    p?.let(::post)?.let { posts.putIfAbsent(it.id, it.copy(after = passed.size)) }
+                }
+            }
+        }
+        return posts.values.toList()
+    }
+
+    /** A post opened on its own: the post, and the token for its comments. */
+    fun postDetail(json: String): Pair<Post?, String?> {
+        val root = JSONObject(json)
+        val post = posts(root, emptySet()).firstOrNull()
+        var token: String? = null
+        walk(root) { key, value ->
+            if (token == null && key == "itemSectionRenderer" && value is JSONObject && value.optString("sectionIdentifier") == "comment-item-section") {
+                token = findFirst(value, "continuationCommand")?.optString("token")?.takeIf { it.isNotBlank() }
+            }
+        }
+        return post to token
+    }
+
+    private fun post(p: JSONObject): Post? {
+        val id = p.optString("postId").takeIf { it.isNotBlank() } ?: return null
+        val attachment = p.optJSONObject("backstageAttachment")
+        val buttons = findFirst(p.optJSONObject("actionButtons"), "commentActionButtonsRenderer")
+        val like = buttons?.optJSONObject("likeButton")?.optJSONObject("toggleButtonRenderer")
+        val reply = buttons?.optJSONObject("replyButton")?.optJSONObject("buttonRenderer")
+        fun detail(o: JSONObject?) = findFirst(o, "browseEndpoint")?.takeIf { it.optString("browseId") == "FEpost_detail" }?.optString("params")?.takeIf { it.isNotBlank() }
+        return Post(
+            id = id,
+            channelId = p.optJSONObject("authorEndpoint")?.optJSONObject("browseEndpoint")?.optString("browseId")?.takeIf { it.startsWith("UC") },
+            author = text(p.optJSONObject("authorText")).orEmpty(),
+            avatar = bestThumbnail(p.optJSONObject("authorThumbnail")),
+            text = text(p.optJSONObject("contentText")).orEmpty(),
+            links = linkRuns(p.optJSONObject("contentText")),
+            time = text(p.optJSONObject("publishedTimeText")),
+            likes = text(p.optJSONObject("voteCount"))?.takeIf { it != "0" },
+            comments = text(reply?.optJSONObject("text"))?.takeIf { it != "0" },
+            detailParams = detail(reply) ?: detail(p.optJSONObject("publishedTimeText")),
+            images = postImages(attachment),
+            video = attachment?.optJSONObject("videoRenderer")?.let(::videoRenderer),
+            poll = attachment?.optJSONObject("pollRenderer")?.let(::poll),
+            liked = like?.optBoolean("isToggled") == true,
+            likeAction = commentAction(like?.optJSONObject("defaultServiceEndpoint")),
+            unlikeAction = commentAction(like?.optJSONObject("toggledServiceEndpoint")),
+        )
+    }
+
+    private fun commentAction(o: JSONObject?): String? =
+        o?.let { findFirst(it, "performCommentActionEndpoint") }?.optString("action")?.takeIf { it.isNotBlank() }
+
+    private fun postImages(a: JSONObject?): List<String> {
+        a ?: return emptyList()
+        val images = a.optJSONObject("backstageImageRenderer")?.let { listOf(it) }
+            ?: a.optJSONObject("postMultiImageRenderer")?.optJSONArray("images")?.let { list ->
+                (0 until list.length()).mapNotNull { list.optJSONObject(it)?.optJSONObject("backstageImageRenderer") }
+            }
+            ?: return emptyList()
+        return images.mapNotNull { bestThumbnail(it.optJSONObject("image"))?.let(::wholeImage) }
+    }
+
+    /** Post pictures come square-cropped; the same picture whole, big enough to stay sharp. */
+    private fun wholeImage(url: String): String =
+        if ("ggpht.com" in url || "googleusercontent.com" in url) url.substringBefore('=') + "=s1600-nd-v1" else url
+
+    private fun poll(p: JSONObject): Poll {
+        val list = p.optJSONArray("choices")
+        val choices = (0 until (list?.length() ?: 0)).mapNotNull { i ->
+            val c = list?.optJSONObject(i) ?: return@mapNotNull null
+            fun ratio(key: String) = c.optDouble(key).takeIf { !it.isNaN() }?.toFloat()
+            PollChoice(
+                text = text(c.optJSONObject("text")).orEmpty(),
+                image = bestThumbnail(c.optJSONObject("image"))?.let(::wholeImage),
+                selected = c.optBoolean("selected"),
+                percentIfSelected = text(c.optJSONObject("votePercentageIfSelected")),
+                percentIfNot = text(c.optJSONObject("votePercentageIfNotSelected")),
+                ratioIfSelected = ratio("voteRatioIfSelected"),
+                ratioIfNot = ratio("voteRatioIfNotSelected"),
+                selectAction = commentAction(c.optJSONObject("selectServiceEndpoint")),
+                deselectAction = commentAction(c.optJSONObject("deselectServiceEndpoint")),
+            )
+        }
+        return Poll(choices, text(p.optJSONObject("totalVotes")), p.optString("type") == "POLL_TYPE_IMAGE")
+    }
+
+    /** Links in plain runs (a post's text): web links, @mentions, videos and hashtags. */
+    private fun linkRuns(o: JSONObject?): List<LinkRun> {
+        val runs = o?.optJSONArray("runs") ?: return emptyList()
+        val links = mutableListOf<LinkRun>()
+        var at = 0
+        for (i in 0 until runs.length()) {
+            val r = runs.optJSONObject(i) ?: continue
+            val t = r.optString("text")
+            val nav = r.optJSONObject("navigationEndpoint")
+            if (nav != null && t.isNotEmpty()) {
+                val url = nav.optJSONObject("urlEndpoint")?.optString("url")?.takeIf { it.isNotBlank() }?.let { u ->
+                    if ("/redirect" in u) Regex("[?&]q=([^&]+)").find(u)?.groupValues?.get(1)?.let { java.net.URLDecoder.decode(it, "UTF-8") } ?: u else u
+                }
+                    ?: nav.optJSONObject("watchEndpoint")?.optString("videoId")?.takeIf { it.isNotBlank() }?.let { "https://youtu.be/$it" }
+                    ?: nav.optJSONObject("browseEndpoint")?.optString("canonicalBaseUrl")?.takeIf { it.isNotBlank() }?.let { "https://www.youtube.com$it" }
+                val channel = nav.optJSONObject("browseEndpoint")?.optString("browseId")?.takeIf { it.startsWith("UC") }
+                if (url != null || channel != null) links += LinkRun(at, t.length, null, url, channel)
+            }
+            at += t.length
+        }
+        return links
     }
 
     fun watch(json: String): WatchInfo {
@@ -652,6 +835,13 @@ object YouTubeParser {
                 (0 until t.length()).mapNotNull { t.optJSONObject(it)?.optJSONObject("tabRenderer")?.optString("title")?.takeIf { s -> s.isNotBlank() } }
             }.orEmpty(),
             aboutToken = findFirst(header?.optJSONObject("description"), "continuationCommand")?.optString("token")?.takeIf { it.isNotBlank() },
+            tabParams = root.optJSONObject("contents")?.optJSONObject("twoColumnBrowseResultsRenderer")?.optJSONArray("tabs")?.let { t ->
+                (0 until t.length()).mapNotNull { i ->
+                    val tab = t.optJSONObject(i)?.optJSONObject("tabRenderer") ?: return@mapNotNull null
+                    val params = tab.optJSONObject("endpoint")?.optJSONObject("browseEndpoint")?.optString("params")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    tab.optString("title").takeIf { it.isNotBlank() }?.let { it to java.net.URLDecoder.decode(params, "UTF-8") }
+                }.toMap()
+            }.orEmpty(),
         )
     }
 
@@ -862,21 +1052,23 @@ object YouTubeParser {
         return result
     }
 
-    private fun walk(node: Any?, visit: (String, Any) -> Unit) {
+    private fun walk(node: Any?, visit: (String, Any) -> Unit) = walk(node, skip, visit)
+
+    private fun walk(node: Any?, skipping: Set<String>, visit: (String, Any) -> Unit) {
         when (node) {
             is JSONObject -> {
                 val keys = node.keys()
                 while (keys.hasNext()) {
                     val key = keys.next()
-                    if (key in skip) continue
+                    if (key in skipping) continue
                     val value = node.opt(key) ?: continue
                     visit(key, value)
                     // A video's own insides hold nothing more to find.
                     if (key in leaves) continue
-                    walk(value, visit)
+                    walk(value, skipping, visit)
                 }
             }
-            is JSONArray -> for (i in 0 until node.length()) walk(node.opt(i), visit)
+            is JSONArray -> for (i in 0 until node.length()) walk(node.opt(i), skipping, visit)
         }
     }
 }

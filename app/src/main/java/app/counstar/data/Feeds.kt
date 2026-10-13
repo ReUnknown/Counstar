@@ -35,6 +35,9 @@ class Feed(
     /** Channels in the first page (search results). */
     var channels by mutableStateOf<List<ChannelItem>>(emptyList())
         private set
+    /** Creators' posts, each placed after [Post.after] of [items]. */
+    var posts by mutableStateOf<List<Post>>(emptyList())
+        private set
     private var continuation: String? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var job: Job? = null
@@ -55,6 +58,7 @@ class Feed(
                         continuation = page.continuation
                         if (page.chips.isNotEmpty()) chips = page.chips
                         channels = page.channels
+                        posts = page.posts
                         loadedOnce = true
                     }
                     .onFailure { error = "Couldn't load videos. Check your connection and try again." }
@@ -93,6 +97,7 @@ class Feed(
             continuation = next
             if (first.chips.isNotEmpty()) chips = first.chips
             channels = first.channels
+            posts = first.posts
             loadedOnce = true
             return true
         } finally {
@@ -111,8 +116,11 @@ class Feed(
                     .onSuccess { page ->
                         val seen = items.mapTo(HashSet()) { it.id }
                         val fresh = page.items.filter { it.id !in seen }
+                        val before = items.size
+                        val seenPosts = posts.mapTo(HashSet()) { it.id }
+                        posts = posts + page.posts.filter { it.id !in seenPosts }.map { it.copy(after = before + it.after) }
                         items = items + fresh
-                        continuation = page.continuation?.takeIf { it != token && fresh.isNotEmpty() }
+                        continuation = page.continuation?.takeIf { it != token && (fresh.isNotEmpty() || page.posts.isNotEmpty()) }
                     }
                     .onFailure { continuation = null }
             } finally {
@@ -138,8 +146,70 @@ class Feed(
         /** A channel's videos tab, newest first. */
         fun channelVideos(channelId: String) = Feed({ YouTube.rawBrowse(browseId = channelId, params = "EgZ2aWRlb3PyBgQKAjoA") }, { WebApi.browseContinuation(it) })
 
+        /** A channel's posts (its Posts tab, by the params the channel page gives for it). */
+        fun channelPosts(channelId: String, params: String) = channelTab(channelId, params)
+
         /** Up next for a video, starting from the watch page JSON already fetched. */
         fun upNext(watchJson: String) = Feed({ Result.success(watchJson) }, { WebApi.nextContinuation(it) })
+    }
+}
+
+/** What a feed shows, in order: videos, with posts and channels where YouTube put them. */
+sealed interface FeedEntry {
+    val key: String
+
+    data class Video(val item: VideoItem) : FeedEntry {
+        override val key get() = "v" + item.id
+    }
+
+    data class PostEntry(val post: Post) : FeedEntry {
+        override val key get() = "p" + post.id
+    }
+
+    data class Channel(val channel: ChannelItem) : FeedEntry {
+        override val key get() = "c" + channel.id
+    }
+}
+
+/**
+ * [items] with [posts] and [channels] mixed in where they came ([Post.after]). Posts beyond the
+ * videos (a Posts tab has only posts) follow at the end.
+ */
+fun mix(items: List<VideoItem>, posts: List<Post> = emptyList(), channels: List<ChannelItem> = emptyList()): List<FeedEntry> {
+    val postsAt = posts.groupBy { it.after.coerceIn(0, items.size) }
+    val channelsAt = channels.groupBy { it.after.coerceIn(0, items.size) }
+    return buildList {
+        for (i in 0..items.size) {
+            channelsAt[i]?.forEach { add(FeedEntry.Channel(it)) }
+            postsAt[i]?.forEach { add(FeedEntry.PostEntry(it)) }
+            items.getOrNull(i)?.let { add(FeedEntry.Video(it)) }
+        }
+    }
+}
+
+/**
+ * A channel tab that can be re-sorted (Latest, Popular, Oldest): the tab's own feed, or the one
+ * a picked order loads. The orders come with the tab's first page.
+ */
+@androidx.compose.runtime.Stable
+class SortedFeed(private val base: Feed) {
+    private var picked by mutableStateOf<Chip?>(null)
+    private var pickedFeed by mutableStateOf<Feed?>(null)
+
+    val feed: Feed get() = pickedFeed ?: base
+    val sorts: List<Chip> get() = base.chips
+    val selected: String? get() = picked?.title ?: sorts.firstOrNull { it.selected }?.title ?: sorts.firstOrNull()?.title
+
+    fun pick(chip: Chip) {
+        val token = chip.token
+        if (token == null || chip == sorts.firstOrNull { it.selected } || chip == sorts.firstOrNull()) {
+            picked = null
+            pickedFeed = null
+            return
+        }
+        if (chip == picked) return
+        picked = chip
+        pickedFeed = Feed.browseFrom(token)
     }
 }
 
@@ -252,8 +322,11 @@ class ChannelPage(val id: String) {
     var playlists by mutableStateOf<List<Playlist>?>(null)
         private set
     val home = Feed.channelTab(id, "EghmZWF0dXJlZPIGBAoCMgA=")
-    val videos = Feed.channelVideos(id)
-    val live = Feed.channelTab(id, "EgdzdHJlYW1z8gYECgJ6AA==")
+    val videos = SortedFeed(Feed.channelVideos(id))
+    val live = SortedFeed(Feed.channelTab(id, "EgdzdHJlYW1z8gYECgJ6AA=="))
+    /** The Posts tab, once the channel page says how to load it. */
+    val posts: Feed? get() = info?.tabParams?.let { it["Posts"] ?: it["Community"] }?.let { params -> postsFeed ?: Feed.channelPosts(id, params).also { postsFeed = it } }
+    private var postsFeed: Feed? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     fun load() {
