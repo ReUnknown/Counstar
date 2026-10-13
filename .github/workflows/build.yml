@@ -6,6 +6,8 @@
 #     KEYSTORE_BASE64      the .jks file, base64-encoded
 #     KEYSTORE_PROPERTIES  keystore/keystore.properties, as is
 #   Release notes come from .github/release-notes/<tag>.md when that file exists.
+#   Without those secrets, a tag builds the release APK unsigned and uploads it (with
+#   apksigner and zipalign) as the "unsigned-release" artifact, to be signed elsewhere.
 name: Build
 
 on:
@@ -26,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      HAS_KEY: ${{ secrets.KEYSTORE_BASE64 != '' && secrets.KEYSTORE_PROPERTIES != '' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -51,15 +54,11 @@ jobs:
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Restore the signing key
-        if: env.RELEASE == 'true'
+        if: env.RELEASE == 'true' && env.HAS_KEY == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PROPERTIES: ${{ secrets.KEYSTORE_PROPERTIES }}
         run: |
-          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PROPERTIES" ]; then
-            echo "::error::The KEYSTORE_BASE64 and KEYSTORE_PROPERTIES secrets aren't set"
-            exit 1
-          fi
           mkdir -p keystore
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > keystore/counstar-release.jks
           printf '%s\n' "$KEYSTORE_PROPERTIES" > keystore/keystore.properties
@@ -68,8 +67,24 @@ jobs:
         if: env.RELEASE == 'true'
         run: ./gradlew assembleRelease
 
+      - name: Upload the unsigned APK and signing tools
+        if: env.RELEASE == 'true' && env.HAS_KEY != 'true'
+        run: |
+          tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          mkdir -p unsigned/lib64
+          cp app/build/outputs/apk/release/app-release-unsigned.apk "unsigned/Counstar-$VERSION-unsigned.apk"
+          cp "$tools/lib/apksigner.jar" "$tools/zipalign" unsigned/
+          cp -r "$tools/lib64/." unsigned/lib64/ 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: env.RELEASE == 'true' && env.HAS_KEY != 'true'
+        with:
+          name: unsigned-release
+          path: unsigned/
+          retention-days: 3
+
       - name: Check the signature
-        if: env.RELEASE == 'true'
+        if: env.RELEASE == 'true' && env.HAS_KEY == 'true'
         run: |
           apk=app/build/outputs/apk/release/app-release.apk
           tools=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
@@ -80,7 +95,7 @@ jobs:
           [ -f "$notes" ] && echo "NOTES=$notes" >> "$GITHUB_ENV" || true
 
       - name: Publish the release
-        if: env.RELEASE == 'true'
+        if: env.RELEASE == 'true' && env.HAS_KEY == 'true'
         uses: softprops/action-gh-release@v2
         with:
           name: Counstar ${{ env.VERSION }}
