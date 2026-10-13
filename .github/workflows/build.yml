@@ -105,6 +105,15 @@ jobs:
           notes=".github/release-notes/$TAG.md"
           [ -f "$notes" ] && echo "NOTES=$notes" >> "$GITHUB_ENV" || true
 
+      - name: Remove a leftover draft of this release
+        if: env.RELEASE == 'true' && env.HAS_KEY == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" = true ]; then
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+          fi
+
       - name: Publish the release
         if: env.RELEASE == 'true' && env.HAS_KEY == 'true'
         uses: softprops/action-gh-release@v2
