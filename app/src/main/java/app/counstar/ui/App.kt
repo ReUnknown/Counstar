@@ -1,6 +1,7 @@
 package app.counstar.ui
 
 import android.content.pm.ActivityInfo
+import app.counstar.ui.components.blockTouches
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedVisibility
@@ -30,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -123,7 +125,41 @@ private fun Shell(session: Session) {
             bars.show(WindowInsetsCompat.Type.systemBars())
         }
     }
-    val toggleFullscreen = { fullscreen = !fullscreen }
+    // On a video, turning the phone on its side goes full screen (if the phone's auto-rotate is
+    // on); turning it back upright comes out, if that's how full screen started. Leaving with
+    // the button while still sideways waits until the phone's been upright before it can rotate in again.
+    var byRotation by remember { mutableStateOf(false) }
+    var waitForUpright by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    DisposableEffect(Nav.watchOpen) {
+        val listener = object : android.view.OrientationEventListener(context) {
+            override fun onOrientationChanged(degrees: Int) {
+                if (degrees == ORIENTATION_UNKNOWN) return
+                val autoRotate = android.provider.Settings.System.getInt(context.contentResolver, android.provider.Settings.System.ACCELEROMETER_ROTATION, 0) == 1
+                if (!autoRotate) return
+                val sideways = degrees in 65..115 || degrees in 245..295
+                val upright = degrees < 25 || degrees > 335
+                if (upright) waitForUpright = false
+                if (!Nav.watchOpen || waitForUpright || Nav.channels.isNotEmpty()) return
+                if (sideways && !fullscreen) {
+                    byRotation = true
+                    fullscreen = true
+                } else if (upright && fullscreen && byRotation) {
+                    byRotation = false
+                    fullscreen = false
+                }
+            }
+        }
+        if (Nav.watchOpen && listener.canDetectOrientation()) listener.enable()
+        onDispose { listener.disable() }
+    }
+    val toggleFullscreen = {
+        if (fullscreen) waitForUpright = true
+        byRotation = false
+        fullscreen = !fullscreen
+    }
+    // Who you are (name, photo, channel) is wanted all over: comments, You.
+    LaunchedEffect(session) { if (session.cookie.isNotBlank()) app.counstar.data.Library.load() }
     BackHandler(Nav.tab != Tab.Home && !Nav.overlay && !Nav.watchOpen) { Nav.goTo(Tab.Home) }
 
     val density = LocalDensity.current
@@ -179,7 +215,7 @@ private fun Shell(session: Session) {
         if (!overlay) {
             val barVisible = with(density) { (barPx + barOffset).toDp() }
             val glass = frost()
-            Box(Modifier.fillMaxWidth().height(statusBar + barVisible).clipToBounds().hazeEffect(haze, glass)) {
+            Box(Modifier.fillMaxWidth().height(statusBar + barVisible).clipToBounds().hazeEffect(haze, glass).blockTouches()) {
                 // Full height always (just slid up): squeezed to what's showing, the chips would vanish.
                 Column(
                     Modifier
@@ -205,7 +241,8 @@ private fun Shell(session: Session) {
                 .fillMaxWidth()
                 .height(dock)
                 .animateContentSize()
-                .hazeEffect(haze, frost(DOCK_TINT)),
+                .hazeEffect(haze, frost(DOCK_TINT))
+                .blockTouches(),
         ) {
             Column(Modifier.align(Alignment.BottomCenter)) {
                 if (showMini) MiniPlayer()
@@ -222,6 +259,9 @@ private fun Shell(session: Session) {
         }
 
         if (Nav.settingsOpen) SettingsSheet(onDismiss = { Nav.settingsOpen = false })
+        app.counstar.ui.channel.ChannelPeek.id?.let { id ->
+            app.counstar.ui.channel.ChannelPeekSheet(id, onDismiss = { app.counstar.ui.channel.ChannelPeek.id = null })
+        }
     }
 }
 

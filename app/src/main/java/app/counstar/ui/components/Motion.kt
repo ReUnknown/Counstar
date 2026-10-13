@@ -37,6 +37,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -235,4 +236,12 @@ fun PlayPauseIcon(playing: Boolean, tint: Color, modifier: Modifier = Modifier, 
         )
         drawPath(path, tint)
     }
+}
+
+/**
+ * Catches every touch on this (and doesn't act on it), so nothing underneath can be tapped
+ * through it: for pages, panels and bars drawn over other content.
+ */
+fun Modifier.blockTouches(): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope { while (true) awaitPointerEvent() }
 }

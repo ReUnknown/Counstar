@@ -1,6 +1,7 @@
 package app.counstar.ui.watch
 
 import androidx.compose.animation.AnimatedContent
+import app.counstar.ui.components.blockTouches
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -77,7 +78,7 @@ fun DescriptionPanel(item: VideoItem, info: WatchInfo, onClose: () -> Unit) {
     val onDismiss = onClose
     androidx.activity.compose.BackHandler { if (transcript) transcript = false else onClose() }
     // Same as the comments: it fills the space under the video, a header with an X on top.
-    Column(Modifier.fillMaxSize().background(colors.surfaceContainerLow)) {
+    Column(Modifier.fillMaxSize().background(colors.surfaceContainerLow).blockTouches()) {
         AnimatedContent(transcript, label = "description") { showTranscript ->
             if (showTranscript) {
                 Transcript(onBack = { transcript = false }, onClose = onClose)
@@ -218,8 +219,10 @@ private fun Transcript(onBack: () -> Unit, onClose: () -> Unit) {
             all == null -> Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { LoadingIndicator(Modifier.size(48.dp)) }
             all.isEmpty() -> Text("No transcript for this video.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp))
             else -> LazyColumn(state = list) {
-                itemsIndexed(all) { _, cue ->
-                    val now = state.position in cue.startMs until cue.endMs
+                // Auto captions overlap: only the latest line to have started is "now".
+                val current = all.indexOfLast { it.startMs <= state.position }
+                itemsIndexed(all) { i, cue ->
+                    val now = i == current && state.position < cue.endMs + 1500
                     Row(
                         Modifier
                             .fillMaxWidth()

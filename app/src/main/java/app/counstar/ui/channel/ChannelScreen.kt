@@ -1,6 +1,7 @@
 package app.counstar.ui.channel
 
 import android.content.Intent
+import app.counstar.ui.components.blockTouches
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
@@ -86,11 +87,24 @@ fun ChannelScreen(channelId: String, bottomPadding: Dp) {
     val page = remember(channelId) { Channels.page(channelId) }
     LaunchedEffect(page) { page.load() }
     val info = page.info
-    var tab by rememberSaveable(channelId) { mutableIntStateOf(0) }
+    var picked by rememberSaveable(channelId) { mutableStateOf<String?>(null) }
+    var aboutOpen by remember { mutableStateOf(false) }
+    // Only the tabs this channel has (YouTube lists just those), minus any that came back empty.
+    val shownTabs = tabs.filter { t ->
+        val listed = info == null || info.tabs.isEmpty() || t in info.tabs
+        val empty = when (t) {
+            "Home" -> page.home.loadedOnce && page.home.items.isEmpty()
+            "Live" -> page.live.loadedOnce && page.live.items.isEmpty()
+            "Playlists" -> page.playlists?.isEmpty() == true
+            else -> false
+        }
+        listed && !empty
+    }.ifEmpty { listOf("Videos") }
+    val tab = picked?.takeIf { it in shownTabs } ?: shownTabs.first()
     val feed: Feed? = when (tab) {
-        0 -> page.home
-        1 -> page.videos
-        2 -> page.live
+        "Home" -> page.home
+        "Videos" -> page.videos
+        "Live" -> page.live
         else -> null
     }
     LaunchedEffect(tab) { if (feed != null) feed.load() else page.loadPlaylists() }
@@ -100,21 +114,22 @@ fun ChannelScreen(channelId: String, bottomPadding: Dp) {
         val list = rememberLazyListState()
         val nearEnd by remember { derivedStateOf { (list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= list.layoutInfo.totalItemsCount - 4 } }
         LaunchedEffect(nearEnd, feed?.items?.size) { if (nearEnd && feed?.canLoadMore == true) feed.loadMore() }
-        Box(Modifier.fillMaxSize().background(colors.background)) {
+        Box(Modifier.fillMaxSize().background(colors.background).blockTouches()) {
             LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottomPadding)) {
-                item(key = "header") { Header(channelId, info, page.failed) }
-                item(key = "tabs") { Tabs(tab) { tab = it } }
+                item(key = "header") { Header(channelId, info, page.failed, onAbout = { aboutOpen = true }) }
+                item(key = "tabs") { Tabs(shownTabs, tab) { picked = it } }
                 when (tab) {
-                    3 -> playlists(page.playlists)
-                    else -> feed?.let { videos(it, featured = tab == 0) }
+                    "Playlists" -> playlists(page.playlists)
+                    else -> feed?.let { videos(it, featured = tab == "Home", avatar = info?.avatar, name = info?.title) }
                 }
             }
+            if (aboutOpen) AboutSheet(page, onDismiss = { aboutOpen = false })
             // Back and share, on glass over the banner; once the header scrolls away, a solid
             // bar with the channel's name.
-            val scrolled by remember { derivedStateOf { list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > 420 } }
+            val scrolled by remember { derivedStateOf { list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > 260 } }
             val bar by androidx.compose.animation.core.animateFloatAsState(if (scrolled) 1f else 0f, label = "bar")
             Box(Modifier.fillMaxWidth().graphicsLayer { alpha = bar }.background(colors.background).statusBarsPadding().height(60.dp))
-            Row(Modifier.statusBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.statusBarsPadding().padding(horizontal = 4.dp, vertical = 4.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 GlassButton({ Nav.closeChannel() }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = Color.White) }
                 Text(
                     info?.title.orEmpty(),
@@ -153,68 +168,44 @@ private fun GlassButton(onClick: () -> Unit, content: @Composable () -> Unit) {
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun Header(channelId: String, info: ChannelInfo?, failed: Boolean) {
+private fun Header(channelId: String, info: ChannelInfo?, failed: Boolean, onAbout: () -> Unit) {
     val colors = MaterialTheme.colorScheme
-    var more by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxWidth()) {
-        // The banner (or, without one, the avatar blown up), blurring toward its bottom and
-        // fading into the page.
-        val art = info?.banner
-        Box(Modifier.fillMaxWidth().height(300.dp)) {
-            when {
-                art != null -> {
-                    // Its colors fill the whole header; the banner itself sits on top, close to
-                    // its own wide shape (cropped tall it loses its words), blurring into the rest.
-                    BlurredImage(art, Modifier.fillMaxSize(), radius = 56.dp)
-                    ProgressiveBlurImage(
-                        art,
-                        Modifier.fillMaxWidth().aspectRatio(3.6f).padding(top = 0.dp).align(Alignment.TopCenter).offset(y = 40.dp),
-                        start = 0.55f,
-                        end = 1f,
-                        maxRadius = 32.dp,
-                    )
-                }
-                info?.avatar != null -> BlurredImage(info.avatar, Modifier.fillMaxSize(), radius = 72.dp)
-            }
-            Box(
-                Modifier.fillMaxSize().background(
-                    Brush.verticalGradient(0f to Color.Transparent, 0.45f to colors.background.copy(alpha = 0.45f), 0.92f to colors.background),
-                ),
-            )
-        }
+    Column(Modifier.fillMaxWidth()) {
+        // The banner, edge to edge under the status bar, fading into the page.
+        val banner = info?.banner
+        if (banner != null) ChannelBanner(banner) else Spacer(Modifier.statusBarsPadding().height(64.dp))
         Column(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 170.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Avatar(
-                info?.avatar,
-                92.dp,
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 // Ringed in the channel's color, a gap of page between.
-                modifier = Modifier.border(2.dp, colors.primary, CircleShape).padding(4.dp),
-            )
+                Avatar(info?.avatar, 80.dp, modifier = Modifier.border(2.dp, colors.primary, CircleShape).padding(4.dp))
+                if (info != null) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(info.title, fontSize = 26.sp, lineHeight = 29.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.8).sp, color = colors.onBackground, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        info.handle?.let { Text(it, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.onBackground, maxLines = 1) }
+                        Text(listOfNotNull(info.subscribers, info.videoCount).joinToString(" · "), fontSize = 13.sp, color = colors.onSurfaceVariant, maxLines = 1)
+                    }
+                }
+            }
             if (info == null) {
                 if (failed) Text("Couldn't load this channel.", color = colors.onSurfaceVariant)
                 else Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { LoadingIndicator(Modifier.size(48.dp)) }
                 return@Column
             }
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(info.title, fontSize = 30.sp, lineHeight = 32.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.9).sp, color = colors.onBackground)
+            // The description's first lines; tap for everything about the channel.
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onAbout), verticalAlignment = Alignment.Bottom) {
                 Text(
-                    listOfNotNull(info.handle, info.subscribers, info.videoCount).joinToString(" · "),
-                    fontSize = 14.sp,
-                    color = colors.onSurfaceVariant,
-                )
-            }
-            info.description?.let {
-                Text(
-                    it,
+                    info.description?.replace('\n', ' ') ?: "More about this channel",
                     fontSize = 14.sp,
                     lineHeight = 20.sp,
-                    maxLines = if (more) Int.MAX_VALUE else 2,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    color = colors.onSurface,
-                    modifier = Modifier.animateContentSize().clickable { more = !more },
+                    color = colors.onSurfaceVariant,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
+                Text(" more", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
             }
             SubscribeButton(
                 channelId,
@@ -230,14 +221,14 @@ private fun Header(channelId: String, info: ChannelInfo?, failed: Boolean) {
 }
 
 @Composable
-private fun Tabs(selected: Int, onSelect: (Int) -> Unit) {
+private fun Tabs(tabs: List<String>, selected: String, onSelect: (String) -> Unit) {
     val colors = MaterialTheme.colorScheme
     Column(Modifier.padding(top = 12.dp)) {
         LazyRow(contentPadding = PaddingValues(horizontal = 6.dp)) {
-            itemsIndexed(tabs) { i, title ->
-                val on = i == selected
+            itemsIndexed(tabs) { _, title ->
+                val on = title == selected
                 Column(
-                    Modifier.height(48.dp).clickable { onSelect(i) }.padding(horizontal = 14.dp),
+                    Modifier.height(48.dp).clickable { onSelect(title) }.padding(horizontal = 14.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
@@ -265,8 +256,9 @@ private fun Tabs(selected: Int, onSelect: (Int) -> Unit) {
 
 /** Home leads with its newest video big, the rest as rows; Videos and Live are full cards. */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
-private fun LazyListScope.videos(feed: Feed, featured: Boolean) {
-    val items = feed.items
+private fun LazyListScope.videos(feed: Feed, featured: Boolean, avatar: String?, name: String?) {
+    // A channel's own tabs leave out its picture and name on each video: fill them in.
+    val items = feed.items.map { it.copy(channelAvatar = it.channelAvatar ?: avatar, channelName = it.channelName ?: name) }
     if (featured) {
         items.firstOrNull()?.let { first ->
             item(key = "featured") {
@@ -327,16 +319,11 @@ fun ChannelResult(channel: app.counstar.data.ChannelItem) {
                 .fillMaxWidth()
                 .pressable(RoundedCornerShape(28.dp), color = colors.surfaceContainer, pressedScale = 0.98f) { Nav.openChannel(channel.id) },
         ) {
-            Box(Modifier.fillMaxWidth().height(120.dp)) {
-                val art = info?.banner
-                if (art != null) ProgressiveBlurImage(art, Modifier.fillMaxSize(), start = 0.6f, end = 1f, maxRadius = 24.dp)
-                else channel.avatar?.let { BlurredImage(it, Modifier.fillMaxSize(), radius = 64.dp) }
-                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Transparent, 1f to colors.surfaceContainer)))
-            }
-            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 72.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Avatar(channel.avatar, 72.dp, modifier = Modifier.border(2.dp, colors.primary, CircleShape).padding(3.dp))
-                    Column(Modifier.weight(1f).padding(bottom = 4.dp)) {
+            Column(Modifier.padding(bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                info?.banner?.let { ChannelBanner(it, aspect = 3.8f) } ?: Spacer(Modifier.height(4.dp))
+                Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Avatar(channel.avatar, 64.dp, modifier = Modifier.border(2.dp, colors.primary, CircleShape).padding(3.dp))
+                    Column(Modifier.weight(1f)) {
                         Text(channel.title, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.onSurface)
                         Text(
                             listOfNotNull(channel.handle ?: info?.handle, channel.subscribers ?: info?.subscribers).joinToString(" · "),
@@ -353,7 +340,7 @@ fun ChannelResult(channel: app.counstar.data.ChannelItem) {
                     info?.bellOptions.orEmpty(),
                     accent = colors.primary,
                     onAccent = colors.onPrimary,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.padding(horizontal = 12.dp).fillMaxWidth(),
                 )
             }
         }

@@ -43,6 +43,7 @@ import app.counstar.playback.CounstarPlayer
 import app.counstar.ui.Nav
 import app.counstar.ui.components.CounstarMotion
 import app.counstar.ui.components.PlayPauseIcon
+import app.counstar.ui.components.rememberArtColorScheme
 import app.counstar.ui.components.pressable
 import app.counstar.ui.theme.YouTubeRed
 import kotlinx.coroutines.launch
@@ -63,6 +64,8 @@ fun MiniPlayer(modifier: Modifier = Modifier) {
     val offset = remember { Animatable(0f) }
     val dismissAt = with(LocalDensity.current) { 140.dp.toPx() }
     val state = rememberPlaybackState(player)
+    // Play/pause in the channel's color, like its Subscribe button.
+    val accent = rememberArtColorScheme(item.channelAvatar ?: item.thumbnail)
     Box(
         modifier
             .fillMaxWidth()
@@ -117,11 +120,11 @@ fun MiniPlayer(modifier: Modifier = Modifier) {
             Box(
                 Modifier
                     .size(44.dp)
-                    .pressable(RoundedCornerShape(15.dp), color = MaterialTheme.colorScheme.onSurface) {
+                    .pressable(RoundedCornerShape(15.dp), color = accent.primary) {
                         if (player.isPlaying) player.pause() else player.play()
                     },
                 contentAlignment = Alignment.Center,
-            ) { PlayPauseIcon(playing = state.playing, tint = MaterialTheme.colorScheme.surface, size = 22.dp) }
+            ) { PlayPauseIcon(playing = state.playing, tint = accent.onPrimary, size = 22.dp) }
             IconButton(onClick = { CounstarPlayer.stop() }) {
                 Icon(Icons.Rounded.Close, contentDescription = "Close")
             }

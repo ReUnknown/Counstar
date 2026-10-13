@@ -1,6 +1,7 @@
 package app.counstar.ui.notifications
 
 import androidx.activity.compose.BackHandler
+import app.counstar.ui.components.blockTouches
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -92,7 +93,7 @@ fun NotificationsScreen(bottomPadding: Dp) {
     }
     val groups = shown.groupBy { whenGroup(it.time) }.toSortedMap(compareBy { it.ordinal })
 
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).blockTouches().statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { Nav.notificationsOpen = false }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back") }
             Text("Notifications", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.8).sp, modifier = Modifier.weight(1f))

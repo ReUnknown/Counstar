@@ -64,10 +64,36 @@ class Feed(
         }
     }
 
-    /** Loads the first page again and waits for it (pull to refresh). */
+    /**
+     * Pull to refresh. YouTube hands back mostly the same first page for a while, so what you
+     * haven't seen yet goes to the top (another page is fetched if there's too little new), and
+     * what you've already seen follows.
+     */
     suspend fun refresh() {
-        load(force = true)
-        job?.join()
+        val seen = items.mapTo(HashSet()) { it.id }
+        job?.cancel()
+        loading = true
+        error = null
+        try {
+            val first = parse { first() }.getOrNull() ?: return
+            var fresh = first.items.filter { it.id !in seen }
+            var next = first.continuation
+            var all = first.items
+            if (fresh.size < 8 && next != null) {
+                parse { more(next!!) }.getOrNull()?.let { page ->
+                    all = (all + page.items).distinctBy { it.id }
+                    fresh = all.filter { it.id !in seen }
+                    next = page.continuation
+                }
+            }
+            items = (fresh + all.filter { it.id in seen }).distinctBy { it.id }
+            continuation = next
+            if (first.chips.isNotEmpty()) chips = first.chips
+            channels = first.channels
+            loadedOnce = true
+        } finally {
+            loading = false
+        }
     }
 
     /** Loads the next page, if there is one and nothing is loading. */
@@ -206,6 +232,18 @@ class ChannelPage(val id: String) {
         private set
     var failed by mutableStateOf(false)
         private set
+    var about by mutableStateOf<ChannelAbout?>(null)
+        private set
+
+    fun loadAbout() {
+        val token = info?.aboutToken ?: return
+        if (about != null) return
+        scope.launch {
+            withContext(Dispatchers.IO) { WebApi.browseContinuation(token).mapCatching(YouTubeParser::about) }
+                .onSuccess { about = it }
+        }
+    }
+
     /** Playlists on the Playlists tab. */
     var playlists by mutableStateOf<List<Playlist>?>(null)
         private set

@@ -316,11 +316,17 @@ fun VideoPlayer(
                 }
                 .pointerInput(fullscreen) {
                     var total = 0f
+                    // In full screen, a drag from the very top edge is the status bar's, not ours.
+                    var counts = true
                     detectVerticalDragGestures(
-                        onDragStart = { total = 0f },
+                        onDragStart = { at ->
+                            total = 0f
+                            counts = !fullscreen || at.y > 56.dp.toPx()
+                        },
                         onDragEnd = {
                             if (fullscreen) {
-                                if (total > with(density) { 90.dp.toPx() }) onToggleFullscreen()
+                                // A long, deliberate pull: looking near the top shouldn't leave full screen.
+                                if (counts && total > with(density) { 200.dp.toPx() }) onToggleFullscreen()
                             } else {
                                 onSwipeEnd(total)
                             }

@@ -1,6 +1,7 @@
 package app.counstar.ui.search
 
 import androidx.activity.compose.BackHandler
+import app.counstar.ui.components.blockTouches
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -70,7 +71,7 @@ fun SearchScreen(bottomPadding: androidx.compose.ui.unit.Dp) {
         results = Feeds.search(q)
     }
 
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).blockTouches().statusBarsPadding()) {
         Row(
             Modifier.fillMaxWidth().height(64.dp).padding(start = 4.dp, end = 12.dp),
             verticalAlignment = Alignment.CenterVertically,

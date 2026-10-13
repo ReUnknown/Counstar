@@ -1,6 +1,7 @@
 package app.counstar.ui.watch
 
 import android.content.Intent
+import app.counstar.ui.components.blockTouches
 import android.widget.Toast
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
@@ -138,7 +139,8 @@ fun WatchScreen(fullscreen: Boolean, onToggleFullscreen: () -> Unit) {
             heatmap = info?.heatmap.orEmpty(),
             chapters = info?.chapters.orEmpty(),
             title = info?.title ?: item.title,
-            modifier = Modifier.fillMaxSize(),
+            // The bars around the picture too: nothing behind full screen can be tapped.
+            modifier = Modifier.fillMaxSize().blockTouches(),
         )
         return
     }
@@ -169,7 +171,8 @@ fun WatchScreen(fullscreen: Boolean, onToggleFullscreen: () -> Unit) {
                 scaleY = 1f - f * 0.15f
                 transformOrigin = TransformOrigin(0.5f, 0f)
             }
-            .background(page),
+            .background(page)
+            .blockTouches(),
     ) {
         // Acrylic glow from the video itself, spilling out under the player and fading into the
         // page. It belongs to the top of the page: scrolling down carries it away with the title.

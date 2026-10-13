@@ -1,6 +1,7 @@
 package app.counstar.ui.watch
 
 import android.widget.Toast
+import app.counstar.ui.components.blockTouches
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
@@ -36,6 +37,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -248,7 +250,7 @@ fun CommentsPanel(state: CommentsState, onClose: () -> Unit, modifier: Modifier 
     BackHandler { if (thread != null) thread = null else onClose() }
     LaunchedEffect(state) { state.start() }
     val colors = MaterialTheme.colorScheme
-    Column(modifier.fillMaxSize().background(colors.surfaceContainerLow)) {
+    Column(modifier.fillMaxSize().background(colors.surfaceContainerLow).blockTouches()) {
         AnimatedContent(
             targetState = thread,
             transitionSpec = {
@@ -287,7 +289,7 @@ fun CommentsPanel(state: CommentsState, onClose: () -> Unit, modifier: Modifier 
                         params = state.list.createParams,
                         hint = "Add a comment…",
                         prefill = "",
-                        post = { text -> WebApi.createComment(state.list.createParams!!, text) },
+                        post = { text -> state.list.createParams?.let { WebApi.createComment(it, text) } ?: Result.failure(IllegalStateException("Sign in to comment")) },
                         onPosted = { text -> state.list.prepend(mine(text)) },
                     )
                 }
@@ -298,11 +300,14 @@ fun CommentsPanel(state: CommentsState, onClose: () -> Unit, modifier: Modifier 
     }
 }
 
+/** Your picture: YouTube's, or your Google account's until that's loaded. */
+private fun myPhoto(): String? = Library.account?.photo ?: app.counstar.data.SessionRepository.session.value?.photoUrl
+
 /** A comment of yours, shown right away once it's posted. */
 private fun mine(text: String) = Comment(
     id = "mine-" + System.nanoTime(),
     author = Library.account?.handle ?: Library.account?.name ?: "You",
-    avatar = Library.account?.photo,
+    avatar = myPhoto(),
     text = text,
     time = "Just now",
     likes = null,
@@ -398,7 +403,7 @@ private fun Thread(parent: Comment, onBack: () -> Unit, onClose: () -> Unit) {
             params = parent.replyParams,
             hint = if (target != null) "Reply to ${target.author}…" else "Reply…",
             prefill = target?.let { "${it.author} " }.orEmpty(),
-            post = { text -> WebApi.createReply(parent.replyParams!!, text) },
+            post = { text -> parent.replyParams?.let { WebApi.createReply(it, text) } ?: Result.failure(IllegalStateException("Sign in to reply")) },
             onPosted = { text -> replies.append(mine(text)) },
         )
     }
@@ -435,7 +440,7 @@ private fun Composer(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Avatar(Library.account?.photo, 32.dp)
+        Avatar(myPhoto(), 32.dp)
         Box(
             Modifier
                 .weight(1f)
@@ -445,7 +450,7 @@ private fun Composer(
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
-            if (params == null) {
+            if (params == null && !app.counstar.BuildConfig.DEBUG) {
                 Text("Sign in to comment", color = colors.onSurfaceVariant, fontSize = 15.sp)
             } else {
                 if (text.text.isEmpty()) Text(hint, color = colors.onSurfaceVariant, fontSize = 15.sp)
@@ -459,7 +464,7 @@ private fun Composer(
                 )
             }
         }
-        if (params != null && text.text.isNotBlank()) {
+        if (text.text.isNotBlank() && (params != null || app.counstar.BuildConfig.DEBUG)) {
             Box(
                 Modifier
                     .size(44.dp)
@@ -541,7 +546,11 @@ private fun CommentBody(c: Comment, maxLines: Int) {
                 is LinkRun -> {
                     val seek = run.seekSeconds
                     val url = run.url
+                    val channel = run.channelId
                     val link = when {
+                        channel != null -> LinkAnnotation.Clickable("channel", TextLinkStyles(SpanStyle(color = blue))) {
+                            app.counstar.ui.channel.ChannelPeek.id = channel
+                        }
                         seek != null -> LinkAnnotation.Clickable("seek", TextLinkStyles(SpanStyle(color = blue))) {
                             CounstarPlayer.player.seekTo(seek * 1000L)
                             CounstarPlayer.player.play()
@@ -659,13 +668,15 @@ private fun CommentRow(
             .padding(start = start, end = 8.dp, top = 12.dp, bottom = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Avatar(c.avatar, avatar)
+        // Their picture and name open their channel card, like YouTube's.
+        val peek = Modifier.clickable(enabled = c.authorChannelId != null) { app.counstar.ui.channel.ChannelPeek.id = c.authorChannelId }
+        Avatar(c.avatar, avatar, modifier = Modifier.clip(CircleShape).then(peek))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 val name = Modifier.let {
                     if (c.byCreator) it.clip(RoundedCornerShape(10.dp)).background(colors.onSurface.copy(alpha = 0.14f)).padding(horizontal = 6.dp, vertical = 1.dp) else it
                 }
-                Text(c.author, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurfaceVariant, modifier = name, maxLines = 1)
+                Text(c.author, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurfaceVariant, modifier = name.then(peek), maxLines = 1)
                 if (c.verified) Icon(Icons.Rounded.CheckCircle, contentDescription = "Verified", modifier = Modifier.size(12.dp), tint = colors.onSurfaceVariant)
                 c.time?.let { Text("· $it", fontSize = 12.sp, color = colors.onSurfaceVariant, maxLines = 1) }
             }

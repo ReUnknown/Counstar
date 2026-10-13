@@ -1,6 +1,7 @@
 package app.counstar.ui.you
 
 import androidx.activity.compose.BackHandler
+import app.counstar.ui.components.blockTouches
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -60,7 +61,7 @@ fun PlaylistScreen(playlist: Playlist, bottomPadding: Dp) {
     val art = playlist.thumbnail ?: feed.items.firstOrNull()?.hdThumbnail
     MaterialTheme(colorScheme = rememberArtColorScheme(art)) {
         val colors = MaterialTheme.colorScheme
-        Box(Modifier.fillMaxSize().background(colors.background)) {
+        Box(Modifier.fillMaxSize().background(colors.background).blockTouches()) {
             VideoList(feed, bottomPadding, empty = "Nothing in this playlist yet.", numbered = true, header = {
                 item(key = "header") {
                     Box(Modifier.fillMaxWidth()) {

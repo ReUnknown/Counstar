@@ -56,6 +56,22 @@ data class ChannelInfo(
     val description: String?,
     val subscribed: Boolean,
     val bellOptions: List<BellOption>,
+    /** The tabs this channel has ("Home", "Videos", "Live", "Playlists", ...). */
+    val tabs: List<String> = emptyList(),
+    /** Loads the "About" panel. */
+    val aboutToken: String? = null,
+)
+
+/** A channel's About: its full description, links and figures. */
+data class ChannelAbout(
+    val description: String?,
+    val links: List<Pair<String, String>>,
+    val joined: String?,
+    val views: String?,
+    val subscribers: String?,
+    val videos: String?,
+    val country: String?,
+    val url: String?,
 )
 
 data class Comment(
@@ -83,6 +99,7 @@ data class Comment(
     val runs: List<TextRun> = emptyList(),
     /** What to send to reply to it (signed in only). */
     val replyParams: String? = null,
+    val authorChannelId: String? = null,
 )
 
 /** Something laid over a stretch of a comment's text, from [start] for [length] characters. */
@@ -92,7 +109,7 @@ sealed interface TextRun {
 }
 
 /** A tappable stretch: an @mention, a link, or a timestamp ([seekSeconds]). */
-data class LinkRun(override val start: Int, override val length: Int, val seekSeconds: Int?, val url: String?) : TextRun
+data class LinkRun(override val start: Int, override val length: Int, val seekSeconds: Int?, val url: String?, val channelId: String? = null) : TextRun
 
 /** An image in place of text: a custom emoji (small) or a GIF / sticker (large). */
 data class ImageRun(override val start: Int, override val length: Int, val url: String, val width: Int, val height: Int, val label: String?) : TextRun
@@ -253,8 +270,6 @@ object YouTubeParser {
         val disliked = findFirst(findFirst(primary, "dislikeButtonViewModel"), "toggleButtonViewModel")?.optBoolean("isToggled") ?: false
         val likeCount = likeButton?.toString()?.let { Regex("along with ([\\d,]+)").find(it)?.groupValues?.get(1) }
             ?.replace(",", "")?.toLongOrNull()
-        val subscribeButton = findFirst(secondary?.optJSONObject("subscribeButton"), "subscribeButtonRenderer")
-        val subscribedState = findFirst(secondary?.optJSONObject("subscribeButton"), "subscribeButtonViewModel")
         val related = results?.optJSONObject("secondaryResults")?.let { feed(it.toString()).items }.orEmpty()
         val commentsPanel = commentsPanel(root)
         return WatchInfo(
@@ -269,9 +284,7 @@ object YouTubeParser {
                 ?: findFirst(owner, "browseEndpoint")?.optString("browseId"),
             channelAvatar = bestThumbnail(owner?.optJSONObject("thumbnail")),
             subscribers = text(owner?.optJSONObject("subscriberCountText")),
-            subscribed = subscribeButton?.optBoolean("subscribed")
-                ?: findFirst(subscribedState, "subscribeButtonViewModel")?.optBoolean("isSubscribed")
-                ?: false,
+            subscribed = subscribed(root, secondary?.optJSONObject("subscribeButton")),
             likes = likeLabel,
             likeCount = likeCount,
             liked = liked,
@@ -441,6 +454,7 @@ object YouTubeParser {
                 undislikeAction = action(surface, "undislikeCommand"),
                 hearted = state?.optString("heartState") == "TOOLBAR_HEART_STATE_HEARTED",
                 runs = runs(props.optJSONObject("content")),
+                authorChannelId = author?.optString("channelId")?.takeIf { it.startsWith("UC") },
                 replyParams = surface?.optJSONObject("replyCommand")
                     ?.let { findFirst(it, "createCommentReplyEndpoint") }?.optString("createReplyParams")?.takeIf { it.isNotBlank() },
             )
@@ -459,7 +473,8 @@ object YouTubeParser {
                 val r = list.optJSONObject(i) ?: continue
                 val seek = findFirst(r, "watchEndpoint")?.takeIf { it.has("startTimeSeconds") }?.optInt("startTimeSeconds")
                 val url = findFirst(r, "urlEndpoint")?.optString("url")?.takeIf { it.isNotBlank() }
-                runs += LinkRun(r.optInt("startIndex"), r.optInt("length"), seek, url)
+                val channel = findFirst(r, "browseEndpoint")?.optString("browseId")?.takeIf { it.startsWith("UC") }
+                runs += LinkRun(r.optInt("startIndex"), r.optInt("length"), seek, url, channel)
             }
         }
         content.optJSONArray("attachmentRuns")?.let { list ->
@@ -631,8 +646,58 @@ object YouTubeParser {
             videoCount = parts.firstOrNull { "video" in it } ?: text(old?.optJSONObject("videosCountText")),
             description = findFirst(header?.optJSONObject("description"), "description")?.optString("content")?.takeIf { it.isNotBlank() }
                 ?: meta?.optString("description")?.takeIf { it.isNotBlank() },
-            subscribed = "\"subscribed\":true" in raw || "\"isSubscribed\":true" in raw,
+            subscribed = subscribed(root, actions),
             bellOptions = bellOptions(actions),
+            tabs = root.optJSONObject("contents")?.optJSONObject("twoColumnBrowseResultsRenderer")?.optJSONArray("tabs")?.let { t ->
+                (0 until t.length()).mapNotNull { t.optJSONObject(it)?.optJSONObject("tabRenderer")?.optString("title")?.takeIf { s -> s.isNotBlank() } }
+            }.orEmpty(),
+            aboutToken = findFirst(header?.optJSONObject("description"), "continuationCommand")?.optString("token")?.takeIf { it.isNotBlank() },
+        )
+    }
+
+    /**
+     * Whether you're subscribed. The button carries both looks (subscribed and not), so the
+     * answer is the subscription state entity its key points at; old renderers say it outright.
+     */
+    private fun subscribed(root: JSONObject, near: JSONObject?): Boolean {
+        findFirst(near, "subscribeButtonRenderer")?.let { if (it.has("subscribed")) return it.optBoolean("subscribed") }
+        val key = findFirst(near, "subscribeButtonViewModel")?.optString("stateEntityStoreKey")?.takeIf { it.isNotBlank() }
+        var found: Boolean? = null
+        walk(root.optJSONObject("frameworkUpdates")) { k, v ->
+            if (k == "subscriptionStateEntity" && v is JSONObject && (key == null || v.optString("key") == key)) {
+                if (found == null) found = v.optBoolean("subscribed")
+            }
+        }
+        return found ?: false
+    }
+
+    /** A channel's About panel (from the header description's continuation). */
+    fun about(json: String): ChannelAbout? {
+        val a = findFirst(JSONObject(json), "aboutChannelViewModel") ?: return null
+        val links = mutableListOf<Pair<String, String>>()
+        a.optJSONArray("links")?.let { list ->
+            for (i in 0 until list.length()) {
+                val l = findFirst(list.optJSONObject(i), "channelExternalLinkViewModel") ?: continue
+                val title = l.optJSONObject("title")?.optString("content").orEmpty()
+                val shown = l.optJSONObject("link")?.optString("content").orEmpty()
+                // YouTube wraps links in a redirect; keep the real address.
+                val url = findFirst(l.optJSONObject("link"), "urlEndpoint")?.optString("url")?.takeIf { it.isNotBlank() }
+                    ?.let { u -> if ("/redirect" in u) Regex("[?&]q=([^&]+)").find(u)?.groupValues?.get(1)?.let { java.net.URLDecoder.decode(it, "UTF-8") } ?: u else u }
+                    ?: "https://$shown"
+                if (shown.isNotBlank()) links += (title.ifBlank { shown }) to url
+            }
+        }
+        fun str(key: String) = a.optJSONObject(key)?.optString("content")?.takeIf { it.isNotBlank() }
+            ?: a.opt(key)?.takeIf { it is String }?.toString()?.takeIf { it.isNotBlank() }
+        return ChannelAbout(
+            description = str("description"),
+            links = links,
+            joined = str("joinedDateText"),
+            views = str("viewCountText"),
+            subscribers = str("subscriberCountText"),
+            videos = str("videoCountText"),
+            country = str("country"),
+            url = str("canonicalChannelUrl"),
         )
     }
 

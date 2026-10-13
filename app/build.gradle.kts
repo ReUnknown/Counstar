@@ -13,8 +13,8 @@ android {
         applicationId = "app.counstar"
         minSdk = 31
         targetSdk = 37
-        versionCode = 7
-        versionName = "0.5.0"
+        versionCode = 8
+        versionName = "0.5.5"
         // Every phone and tablet Counstar targets is 64-bit: no 32-bit native code.
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
