@@ -526,7 +526,7 @@ fun chapterAt(chapters: List<Chapter>, positionMs: Long): Chapter? = chapters.la
 
 /** The caption line for now, over the bottom of the picture (above the controls when they show). */
 @Composable
-private fun BoxScope.Captions(positionMs: Long, fullscreen: Boolean, lifted: Boolean) {
+internal fun BoxScope.Captions(positionMs: Long, fullscreen: Boolean, lifted: Boolean) {
     if (CounstarPlayer.caption == null) return
     val cue = CounstarPlayer.cues.lastOrNull { it.startMs <= positionMs && positionMs < it.endMs } ?: return
     val lift by animateDpAsState(if (lifted) 64.dp else 12.dp, label = "captions")

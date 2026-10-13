@@ -101,9 +101,9 @@ fun SubscriptionsScreen(contentPadding: PaddingValues, refreshOffset: Dp) {
     val channels = (recent + rest).take(30)
     // All: videos with the channels' posts among them; Posts: just those.
     val shown = when (filter) {
-        Filter.All -> mix(feed.items, feed.posts)
+        Filter.All -> mix(feed.items, feed.posts, shorts = feed.shorts)
         Filter.Posts -> feed.posts.takeIf { app.counstar.data.Settings.showPosts }.orEmpty().map { FeedEntry.PostEntry(it) }
-        else -> feed.items.filter(filter::keeps).map { FeedEntry.Video(it) }
+        else -> feed.items.filter { filter.keeps(it) && (app.counstar.data.Settings.showShorts || !it.isShort) }.map { FeedEntry.Video(it) }
     }
 
     val refresh = rememberPullToRefreshState()
@@ -156,6 +156,7 @@ fun SubscriptionsScreen(contentPadding: PaddingValues, refreshOffset: Dp) {
                     is FeedEntry.Video -> VideoCard(e.item, onClick = { Nav.watch(e.item) }, modifier = Modifier.animateItem())
                     is FeedEntry.PostEntry -> PostCard(e.post, modifier = Modifier.animateItem())
                     is FeedEntry.Channel -> {}
+                    is FeedEntry.Shorts -> app.counstar.ui.shorts.ShortsRow(e.shelf, Modifier.animateItem())
                 }
             }
             when {

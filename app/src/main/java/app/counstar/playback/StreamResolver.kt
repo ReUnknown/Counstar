@@ -43,6 +43,8 @@ class VideoStream(
     val storyboardSpec: String? = null,
     val statsUrl: String? = null,
     val heights: List<Int> = emptyList(),
+    val audioTracks: List<VideoStreams.AudioTrack> = emptyList(),
+    val audioTrack: String? = null,
 ) {
     /** An HLS manifest: picture and sound together, which the player streams as one. */
     val isHls: Boolean get() = videoUrl == audioUrl || "/manifest/hls" in videoUrl || ".m3u8" in videoUrl
@@ -56,6 +58,8 @@ object StreamResolver {
 
     /** A quality picked for the current video, over the setting. */
     @Volatile var heightOverride: Int? = null
+    /** An audio track picked for the current video (null: its original). */
+    @Volatile var audioTrackOverride: String? = null
 
     @Volatile private var applicationContext: Context? = null
     @Volatile private var currentBundle: Bundle? = null
@@ -99,6 +103,7 @@ object StreamResolver {
             poToken = { id, visitorData -> tokenProvider.getPoToken(id, visitorData, YouTube.cookie) },
             log = { Timber.tag(TAG).d(it) },
             live = live,
+            audioTrack = audioTrackOverride,
         )
         return VideoStream(
             videoId = videoId,
@@ -112,6 +117,8 @@ object StreamResolver {
             storyboardSpec = stream.storyboardSpec,
             statsUrl = stream.statsUrl,
             heights = stream.heights,
+            audioTracks = stream.audioTracks,
+            audioTrack = stream.audioTrack,
         )
     }
 

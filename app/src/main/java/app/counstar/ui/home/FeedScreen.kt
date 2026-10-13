@@ -114,11 +114,12 @@ fun FeedScreen(
             modifier = Modifier.fillMaxSize(),
         ) {
             // Videos, with creators' posts where YouTube puts them.
-            items(mix(feed.items, feed.posts), key = { it.key }) { e ->
+            items(mix(feed.items, feed.posts, shorts = feed.shorts), key = { it.key }) { e ->
                 when (e) {
                     is FeedEntry.Video -> VideoCard(e.item, onClick = { Nav.watch(e.item) }, modifier = Modifier.animateItem())
                     is FeedEntry.PostEntry -> PostCard(e.post, modifier = Modifier.animateItem())
                     is FeedEntry.Channel -> {}
+                    is FeedEntry.Shorts -> app.counstar.ui.shorts.ShortsRow(e.shelf, Modifier.animateItem())
                 }
             }
             when {

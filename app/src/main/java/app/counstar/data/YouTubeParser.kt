@@ -19,6 +19,10 @@ data class VideoItem(
     val watched: Float? = null,
     /** The heading YouTube files it under on a list page ("Today", "Yesterday"), if any. */
     val section: String? = null,
+    /** A Short: opens in the Shorts player. */
+    val isShort: Boolean = false,
+    /** For a Short: what loads the Shorts that follow it (swiping up). */
+    val sequenceParams: String? = null,
 ) {
     /** A sharp (1280×720) thumbnail; very old videos lack it, so fall back to [thumbnail]. */
     val hdThumbnail: String get() = "https://i.ytimg.com/vi/$id/hq720.jpg"
@@ -43,7 +47,11 @@ data class FeedPage(
     val chips: List<Chip> = emptyList(),
     val channels: List<ChannelItem> = emptyList(),
     val posts: List<Post> = emptyList(),
+    val shorts: List<ShortsShelf> = emptyList(),
 )
+
+/** A row of Shorts in a feed or search, after [after] of the page's videos. */
+data class ShortsShelf(val items: List<VideoItem>, val after: Int, val title: String? = null)
 
 /**
  * A channel as a search result or in your subscriptions. [after]: how many of the page's videos
@@ -209,6 +217,8 @@ data class Notification(
     val thumbnail: String?,
     val videoId: String?,
     val read: Boolean,
+    /** About a Short (opens in the Shorts player). */
+    val short: Boolean = false,
 )
 
 /** What the watch page shows below the player. */
@@ -270,6 +280,7 @@ object YouTubeParser {
         "videoRenderer", "compactVideoRenderer", "lockupViewModel", "chipCloudChipRenderer", "notificationRenderer",
         "sortFilterSubMenuRenderer", "commentRepliesRenderer", "chipViewModel",
         "backstagePostThreadRenderer", "backstagePostRenderer", "postRenderer",
+        "shortsLockupViewModel", "reelItemRenderer",
     )
 
     private val postKeys = setOf("backstagePostThreadRenderer", "backstagePostRenderer", "postRenderer")
@@ -320,7 +331,88 @@ object YouTubeParser {
             }
         }
         val items = if (sections.isEmpty()) found.values.toList() else found.values.map { it.copy(section = sections[it.id]) }
-        return FeedPage(items, continuation, chips, channels.values.toList(), posts(root, found.keys))
+        return FeedPage(items, continuation, chips, channels.values.toList(), posts(root, found.keys), shorts(root, found.keys))
+    }
+
+    private val shortKeys = setOf("shortsLockupViewModel", "reelItemRenderer")
+
+    /**
+     * Shorts in a page (the shelves the video walk skips), each shelf placed after the videos
+     * that come before it. Shorts next to each other make one shelf.
+     */
+    private fun shorts(root: JSONObject, videos: Set<String>): List<ShortsShelf> {
+        val shelves = mutableListOf<ShortsShelf>()
+        val passed = HashSet<String>()
+        val seen = HashSet<String>()
+        var current = mutableListOf<VideoItem>()
+        var at = 0
+        fun close() {
+            if (current.isNotEmpty()) shelves += ShortsShelf(current, at)
+            current = mutableListOf()
+        }
+        walk(root, skip - shortKeys - "reelShelfRenderer" - "richSectionRenderer") { key, value ->
+            if (value !is JSONObject) return@walk
+            when (key) {
+                "videoRenderer", "compactVideoRenderer", "gridVideoRenderer" -> value.optString("videoId").takeIf { it in videos }?.let { if (passed.add(it)) close() }
+                "lockupViewModel" -> value.optString("contentId").takeIf { it in videos }?.let { if (passed.add(it)) close() }
+                in shortKeys -> shortItem(key, value)?.takeIf { seen.add(it.id) }?.let {
+                    if (current.isEmpty()) at = passed.size
+                    current += it
+                }
+            }
+        }
+        close()
+        return shelves
+    }
+
+    /** A Short's card: shortsLockupViewModel (now) or reelItemRenderer (older pages). */
+    private fun shortItem(key: String, v: JSONObject): VideoItem? {
+        if (key == "reelItemRenderer") {
+            val id = v.optString("videoId").takeIf { it.isNotBlank() } ?: return null
+            return VideoItem(
+                id = id,
+                title = text(v.optJSONObject("headline")).orEmpty(),
+                thumbnail = bestThumbnail(v.optJSONObject("thumbnail")) ?: "https://i.ytimg.com/vi/$id/frame0.jpg",
+                views = text(v.optJSONObject("viewCountText")),
+                isShort = true,
+                sequenceParams = findFirst(v, "reelWatchEndpoint")?.optString("sequenceParams")?.takeIf { it.isNotBlank() },
+            )
+        }
+        val watch = findFirst(v.optJSONObject("onTap"), "reelWatchEndpoint") ?: return null
+        val id = watch.optString("videoId").takeIf { it.isNotBlank() } ?: return null
+        val meta = v.optJSONObject("overlayMetadata")
+        return VideoItem(
+            id = id,
+            title = meta?.optJSONObject("primaryText")?.optString("content").orEmpty(),
+            thumbnail = bestThumbnail(watch.optJSONObject("thumbnail"))
+                ?: findFirst(v.optJSONObject("thumbnailViewModel"), "image")?.let(::bestSource)
+                ?: "https://i.ytimg.com/vi/$id/frame0.jpg",
+            views = meta?.optJSONObject("secondaryText")?.optString("content")?.takeIf { it.isNotBlank() },
+            isShort = true,
+            sequenceParams = watch.optString("sequenceParams").takeIf { it.isNotBlank() },
+        )
+    }
+
+    /** The Shorts that follow one (reel_watch_sequence): the next page's Shorts, and its token. */
+    fun shortsSequence(json: String): Pair<List<VideoItem>, String?> {
+        val root = JSONObject(json)
+        val items = mutableListOf<VideoItem>()
+        root.optJSONArray("entries")?.let { entries ->
+            for (i in 0 until entries.length()) {
+                val e = entries.optJSONObject(i) ?: continue
+                val watch = findFirst(e, "reelWatchEndpoint") ?: continue
+                val id = watch.optString("videoId").takeIf { it.isNotBlank() } ?: continue
+                items += VideoItem(
+                    id = id,
+                    title = "",
+                    thumbnail = bestThumbnail(watch.optJSONObject("thumbnail")) ?: "https://i.ytimg.com/vi/$id/frame0.jpg",
+                    isShort = true,
+                )
+            }
+        }
+        val next = root.optJSONObject("continuationEndpoint")?.let { c -> findFirst(c, "continuationCommand")?.optString("token") ?: findFirst(c, "reelWatchEndpoint")?.optString("sequenceParams") }
+            ?.takeIf { it.isNotBlank() }
+        return items to next
     }
 
     /**
@@ -474,7 +566,8 @@ object YouTubeParser {
         val results = root.optJSONObject("contents")?.optJSONObject("twoColumnWatchNextResults")
         val primary = findFirst(results?.optJSONObject("results"), "videoPrimaryInfoRenderer")
         val secondary = findFirst(results?.optJSONObject("results"), "videoSecondaryInfoRenderer")
-        val owner = secondary?.optJSONObject("owner")?.optJSONObject("videoOwnerRenderer")
+        // A Short's page keeps its owner elsewhere: look anywhere if it isn't in the usual place.
+        val owner = secondary?.optJSONObject("owner")?.optJSONObject("videoOwnerRenderer") ?: findFirst(root, "videoOwnerRenderer")
         val likeButton = findFirst(primary, "likeButtonViewModel")
         val likeLabel = likeButton?.let { findFirst(it, "buttonViewModel") }?.optString("title")?.takeIf { it.isNotBlank() }
         val liked = likeButton?.let { findFirst(it, "toggleButtonViewModel") }?.optBoolean("isToggled") ?: false
@@ -930,6 +1023,7 @@ object YouTubeParser {
                     thumbnail = bestThumbnail(value.optJSONObject("videoThumbnail")),
                     videoId = notificationVideo(value),
                     read = value.optBoolean("read"),
+                    short = value.optJSONObject("navigationEndpoint")?.toString()?.let { "reelWatchEndpoint" in it || "/shorts/" in it } == true,
                 )
             }
         }
@@ -1006,6 +1100,7 @@ object YouTubeParser {
             duration = text(v.optJSONObject("lengthText")),
             isLive = isLive,
             watched = resume?.optInt("percentDurationWatched", -1)?.takeIf { it >= 0 }?.div(100f),
+            isShort = v.optJSONObject("navigationEndpoint")?.has("reelWatchEndpoint") == true,
         )
     }
 

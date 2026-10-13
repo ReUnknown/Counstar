@@ -169,7 +169,8 @@ private fun Shell(session: Session) {
             when (val target = Links.resolve(link)) {
                 is Links.Target.Video -> Nav.watch(Links.video(target.id), startAtMs = target.startMs)
                 is Links.Target.Channel -> Nav.openChannel(target.id)
-                is Links.Target.Short -> Nav.openShort(Links.video(target.id))
+                // A Short opens in the Shorts player (on the watch page if Shorts are off).
+                is Links.Target.Short -> Nav.watch(Links.video(target.id).copy(isShort = true))
                 null -> Toast.makeText(context, "Counstar can't open that link", Toast.LENGTH_SHORT).show()
             }
         }
@@ -182,7 +183,9 @@ private fun Shell(session: Session) {
     val statusBar = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val systemNav = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val bottomBar = BottomBarHeight + systemNav
-    val showMini = CounstarPlayer.current != null && !Nav.watchOpen && Nav.short == null
+    // A Short never shrinks to the mini player.
+    val showMini = CounstarPlayer.current != null && CounstarPlayer.current?.isShort != true && !Nav.watchOpen
+    LaunchedEffect(app.counstar.data.Settings.showShorts) { if (!app.counstar.data.Settings.showShorts && Nav.tab == Tab.Shorts) Nav.goTo(Tab.Home) }
     val dock = bottomBar + if (showMini) MiniPlayerHeight else 0.dp
     val bottom: Dp = dock + 16.dp
     val overlay = Nav.overlay
@@ -214,6 +217,7 @@ private fun Shell(session: Session) {
                     "Watch a few videos and your recommendations will show up here.",
                     refreshOffset = statusBar + barHeight,
                 )
+                Tab.Shorts -> app.counstar.ui.shorts.ShortsPlayer(Feeds.shortsTab, onClose = null, active = !overlay && !Nav.watchOpen, bottomInset = dock)
                 Tab.Subscriptions -> SubscriptionsScreen(padding, refreshOffset = statusBar + barHeight)
                 Tab.You -> YouScreen(session, padding)
             }
@@ -229,7 +233,7 @@ private fun Shell(session: Session) {
 
         // Top: one even pane of frosted glass from the very top of the screen down to the
         // bottom of the top bar (as much of the bar as is showing).
-        if (!overlay) {
+        if (!overlay && Nav.tab != Tab.Shorts) {
             val barVisible = with(density) { (barPx + barOffset).toDp() }
             val glass = frost()
             Box(Modifier.fillMaxWidth().height(statusBar + barVisible).clipToBounds().hazeEffect(haze, glass).blockTouches()) {
@@ -246,7 +250,7 @@ private fun Shell(session: Session) {
                 // The bar slides up under the status bar: keep its content out of the clock.
                 Box(Modifier.fillMaxWidth().height(statusBar).hazeEffect(haze, glass))
             }
-        } else if (Nav.playlist == null && Nav.channels.isEmpty() && Nav.post == null) {
+        } else if (overlay && Nav.playlist == null && Nav.channels.isEmpty() && Nav.post == null) {
             Box(Modifier.fillMaxWidth().height(statusBar).background(MaterialTheme.colorScheme.background))
         }
 
@@ -275,7 +279,7 @@ private fun Shell(session: Session) {
             WatchScreen(fullscreen = fullscreen, onToggleFullscreen = toggleFullscreen)
         }
 
-        Nav.short?.let { s -> key(s.id) { app.counstar.ui.shorts.ShortsScreen(s) } }
+        Nav.shorts?.let { q -> key(q) { app.counstar.ui.shorts.ShortsPlayer(q, onClose = { Nav.closeShort() }) } }
 
         if (Nav.settingsOpen) SettingsSheet(onDismiss = { Nav.settingsOpen = false })
         app.counstar.ui.channel.ChannelPeek.id?.let { id ->

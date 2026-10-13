@@ -38,7 +38,13 @@ object VideoStreams {
         val statsUrl: String? = null,
         /** Every height the video comes in (for this phone's codecs), tallest first. */
         val heights: List<Int> = emptyList(),
+        /** The video's audio languages (dubbed videos have several), and the one playing. */
+        val audioTracks: List<AudioTrack> = emptyList(),
+        val audioTrack: String? = null,
     )
+
+    /** One of a video's audio tracks: "English (original)", "Spanish", ... */
+    data class AudioTrack(val id: String, val name: String, val original: Boolean)
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
@@ -57,6 +63,8 @@ object VideoStreams {
         log: (String) -> Unit = {},
         /** Known to be live (from the card): go straight to the live stream. */
         live: Boolean = false,
+        /** An audio track picked by its id (null: the video's original). */
+        audioTrack: String? = null,
     ): Stream {
         val innerTube = YouTube.extractionTransport().innerTube
         // The embed page's player script is much smaller than the watch page's, so deciphering
@@ -115,7 +123,22 @@ object VideoStreams {
                     log("${client.clientName}: ${response.playabilityStatus.status}")
                     continue
                 }
-                val formats = response.streamingData?.adaptiveFormats.orEmpty()
+                // Dubbed videos have an audio track per language: play the picked one, else the
+                // original (otherwise the best-sounding stream could be any dub).
+                val tracksByItag = HashMap<Int, AudioTrack>()
+                JSONObject(text).optJSONObject("streamingData")?.optJSONArray("adaptiveFormats")?.let { list ->
+                    for (i in 0 until list.length()) {
+                        val f = list.optJSONObject(i) ?: continue
+                        val t = f.optJSONObject("audioTrack") ?: continue
+                        val id = t.optString("id").takeIf { it.isNotBlank() } ?: continue
+                        tracksByItag[f.optInt("itag")] = AudioTrack(id, t.optString("displayName").ifBlank { id }, t.optBoolean("audioIsDefault"))
+                    }
+                }
+                val tracks = tracksByItag.values.distinctBy { it.id }.sortedByDescending { it.original }
+                val wanted = tracks.firstOrNull { it.id == audioTrack } ?: tracks.firstOrNull { it.original } ?: tracks.firstOrNull()
+                val formats = response.streamingData?.adaptiveFormats.orEmpty().filter { f ->
+                    wanted == null || !f.isAudio || tracksByItag[f.itag]?.id.let { it == null || it == wanted.id }
+                }
                 // AV1 isn't decoded in hardware on many phones. VP9 is on most, H.264 on all.
                 val videoFormats = formats.filter { !it.isAudio && "av01" !in it.mimeType && (allowVp9 || "vp9" !in it.mimeType) }
                 val video = selectBestVideoFormat(videoFormats, requireUrl = false, maxHeight = maxHeight)
@@ -148,6 +171,8 @@ object VideoStreams {
                     storyboardSpec = storyboard,
                     statsUrl = statsUrl,
                     heights = videoFormats.mapNotNull { it.height }.filter { it >= 144 }.distinct().sortedDescending(),
+                    audioTracks = tracks,
+                    audioTrack = wanted?.id,
                 )
             } catch (e: CancellationException) {
                 throw e

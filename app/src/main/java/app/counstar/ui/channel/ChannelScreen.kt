@@ -323,6 +323,7 @@ private fun LazyListScope.posts(feed: Feed) {
             is FeedEntry.PostEntry -> PostCard(e.post, modifier = Modifier.padding(bottom = 12.dp))
             is FeedEntry.Video -> Column(Modifier.padding(bottom = 16.dp)) { VideoCard(e.item, onClick = { Nav.watch(e.item) }) }
             is FeedEntry.Channel -> {}
+            is FeedEntry.Shorts -> app.counstar.ui.shorts.ShortsRow(e.shelf, Modifier.padding(bottom = 16.dp))
         }
     }
     when {

@@ -224,11 +224,12 @@ fun SearchScreen(bottomPadding: androidx.compose.ui.unit.Dp) {
                 // puts them among the videos.
                 val top = feed.channels.firstOrNull()?.takeIf { it.after == 0 }
                 if (top != null) item(key = "top") { app.counstar.ui.channel.ChannelResult(top) }
-                items(mix(feed.items, feed.posts, feed.channels.filter { it.id != top?.id }), key = { it.key }) { e ->
+                items(mix(feed.items, feed.posts, feed.channels.filter { it.id != top?.id }, feed.shorts), key = { it.key }) { e ->
                     when (e) {
                         is FeedEntry.Video -> VideoCard(e.item, onClick = { Nav.watch(e.item) })
                         is FeedEntry.Channel -> app.counstar.ui.channel.ChannelRow(e.channel)
                         is FeedEntry.PostEntry -> app.counstar.ui.posts.PostCard(e.post)
+                        is FeedEntry.Shorts -> app.counstar.ui.shorts.ShortsRow(e.shelf)
                     }
                 }
                 if (feed.loading) {

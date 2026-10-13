@@ -69,6 +69,11 @@ object CounstarPlayer {
     /** Picked for this video (null: automatic, up to the setting). */
     var pickedHeight by mutableStateOf<Int?>(null)
         private set
+    /** The video's audio languages, and the one playing. */
+    var audioTracks by mutableStateOf<List<com.metrolist.innertube.VideoStreams.AudioTrack>>(emptyList())
+        private set
+    var audioTrack by mutableStateOf<String?>(null)
+        private set
     var speed by mutableStateOf(1f)
         private set
     var loop by mutableStateOf(false)
@@ -152,6 +157,14 @@ object CounstarPlayer {
         load(item, startAt = player.currentPosition, isRetry = true)
     }
 
+    /** Plays this video's [id] audio track, from where it is now. */
+    fun pickAudioTrack(id: String) {
+        val item = current ?: return
+        if (id == audioTrack) return
+        StreamResolver.audioTrackOverride = id
+        load(item, startAt = player.currentPosition, isRetry = true)
+    }
+
     fun changeSpeed(value: Float) {
         speed = value
         player.setPlaybackSpeed(value)
@@ -218,6 +231,9 @@ object CounstarPlayer {
             height = null
             pickedHeight = null
             StreamResolver.heightOverride = null
+            audioTracks = emptyList()
+            audioTrack = null
+            StreamResolver.audioTrackOverride = null
             captionTracks = emptyList()
             captionJob?.cancel()
             caption = null
@@ -235,6 +251,8 @@ object CounstarPlayer {
                     storyboard = Storyboard.parse(it.storyboardSpec)
                     if (it.heights.isNotEmpty()) heights = it.heights
                     height = it.height
+                    audioTracks = it.audioTracks
+                    audioTrack = it.audioTrack
                     player.setMediaSource(mediaSource(it, item), startAt)
                     player.setPlaybackSpeed(speed)
                     player.prepare()

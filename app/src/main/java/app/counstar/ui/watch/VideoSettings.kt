@@ -21,6 +21,9 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.HighQuality
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.SwipeUp
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.RecordVoiceOver
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,31 +47,49 @@ import app.counstar.data.Settings
 import app.counstar.playback.CounstarPlayer
 import app.counstar.ui.components.pressable
 
-private enum class Page { Main, Quality, Speed }
+private enum class Page { Main, Quality, Speed, Audio }
 
 private val speeds = listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
 
 private fun speedLabel(s: Float) = if (s == 1f) "Normal" else (if (s % 1f == 0f) s.toInt().toString() else s.toString().trimEnd('0')) + "x"
 
-/** The video's settings: quality, playback speed, loop and captions. */
+/**
+ * The video's settings: quality, playback speed, audio track, loop and captions. For a Short
+ * ([onDescription] given): captions, auto scroll, description, quality, audio track and speed.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VideoSettingsSheet(onDismiss: () -> Unit, onCaptions: () -> Unit) {
+fun VideoSettingsSheet(onDismiss: () -> Unit, onCaptions: () -> Unit, onDescription: (() -> Unit)? = null) {
+    val short = onDescription != null
     var page by remember { mutableStateOf(Page.Main) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         AnimatedContent(page, label = "settings") { current ->
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
                 when (current) {
                     Page.Main -> {
-                        Text("Video settings", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(start = 24.dp, bottom = 8.dp))
+                        Text(if (short) "Short" else "Video settings", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(start = 24.dp, bottom = 8.dp))
                         val height = CounstarPlayer.height
                         val quality = CounstarPlayer.pickedHeight?.let { "${it}p" } ?: ("Auto" + (height?.let { " (${it}p)" } ?: ""))
-                        Option(Icons.Rounded.HighQuality, "Quality", quality, arrow = true) { page = Page.Quality }
-                        Option(Icons.Rounded.Speed, "Playback speed", speedLabel(CounstarPlayer.speed), arrow = true) { page = Page.Speed }
-                        Option(Icons.Outlined.ClosedCaption, "Captions", CounstarPlayer.caption?.name ?: if (CounstarPlayer.captionTracks.isEmpty()) "None" else "Off", arrow = true, onClick = onCaptions)
-                        Option(Icons.Rounded.Repeat, "Loop video", null, trailing = {
-                            Switch(checked = CounstarPlayer.loop, onCheckedChange = { CounstarPlayer.changeLoop(it) })
-                        }) { CounstarPlayer.changeLoop(!CounstarPlayer.loop) }
+                        val captions = CounstarPlayer.caption?.name ?: if (CounstarPlayer.captionTracks.isEmpty()) "None" else "Off"
+                        val audio = CounstarPlayer.audioTracks.firstOrNull { it.id == CounstarPlayer.audioTrack }?.name
+                        if (short) {
+                            Option(Icons.Outlined.ClosedCaption, "Captions", captions, arrow = true, onClick = onCaptions)
+                            Option(Icons.Rounded.SwipeUp, "Auto scroll", null, trailing = {
+                                Switch(checked = Settings.shortsAutoScroll, onCheckedChange = { Settings.saveShortsAutoScroll(it) })
+                            }) { Settings.saveShortsAutoScroll(!Settings.shortsAutoScroll) }
+                            Option(Icons.Rounded.Description, "Description", null, arrow = true) { onDescription?.invoke() }
+                            Option(Icons.Rounded.HighQuality, "Quality", quality, arrow = true) { page = Page.Quality }
+                            if (CounstarPlayer.audioTracks.size > 1) Option(Icons.Rounded.RecordVoiceOver, "Audio track", audio, arrow = true) { page = Page.Audio }
+                            Option(Icons.Rounded.Speed, "Playback speed", speedLabel(CounstarPlayer.speed), arrow = true) { page = Page.Speed }
+                        } else {
+                            Option(Icons.Rounded.HighQuality, "Quality", quality, arrow = true) { page = Page.Quality }
+                            Option(Icons.Rounded.Speed, "Playback speed", speedLabel(CounstarPlayer.speed), arrow = true) { page = Page.Speed }
+                            if (CounstarPlayer.audioTracks.size > 1) Option(Icons.Rounded.RecordVoiceOver, "Audio track", audio, arrow = true) { page = Page.Audio }
+                            Option(Icons.Outlined.ClosedCaption, "Captions", captions, arrow = true, onClick = onCaptions)
+                            Option(Icons.Rounded.Repeat, "Loop video", null, trailing = {
+                                Switch(checked = CounstarPlayer.loop, onCheckedChange = { CounstarPlayer.changeLoop(it) })
+                            }) { CounstarPlayer.changeLoop(!CounstarPlayer.loop) }
+                        }
                     }
                     Page.Quality -> {
                         SubHeader("Quality") { page = Page.Main }
@@ -80,6 +101,12 @@ fun VideoSettingsSheet(onDismiss: () -> Unit, onCaptions: () -> Unit) {
                     Page.Speed -> {
                         SubHeader("Playback speed") { page = Page.Main }
                         speeds.forEach { s -> Choice(speedLabel(s), CounstarPlayer.speed == s) { CounstarPlayer.changeSpeed(s); onDismiss() } }
+                    }
+                    Page.Audio -> {
+                        SubHeader("Audio track") { page = Page.Main }
+                        CounstarPlayer.audioTracks.forEach { t ->
+                            Choice(t.name, CounstarPlayer.audioTrack == t.id) { CounstarPlayer.pickAudioTrack(t.id); onDismiss() }
+                        }
                     }
                 }
             }

@@ -30,7 +30,8 @@ springy, physical motion.
 - Subscriptions, history and notifications
 - Search, with suggestions (channels right in them), quick matches and your history
 - Live streams, with a LIVE button that catches you up
-- Shorts links open in a full-screen Shorts player
+- Shorts: their own tab, shelves in your feed and search, swipe-up player with double-tap likes (or turn them off)
+- Dubbed videos: pick the audio language
 - Full-screen and floating mini player: the video keeps playing in the corner as you browse
 - Background play, with controls in the notification and on the lock screen
 - Opens YouTube links, or share one to Counstar from any app

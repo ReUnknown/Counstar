@@ -24,6 +24,12 @@ object Settings {
     /** Creators' posts and polls: in feeds, search and on channels (off: never shown). */
     var showPosts by mutableStateOf(true)
         private set
+    /** Shorts: the tab, shelves in feeds and search, and opening Shorts in the Shorts player. */
+    var showShorts by mutableStateOf(true)
+        private set
+    /** In the Shorts player: go on to the next Short when one ends (instead of looping). */
+    var shortsAutoScroll by mutableStateOf(false)
+        private set
     /** Searches you've made, newest first. */
     var searchHistory by mutableStateOf<List<String>>(emptyList())
         private set
@@ -41,6 +47,8 @@ object Settings {
         maxHeight = p.getInt("max_height", 1080)
         backgroundPlay = p.getBoolean("background_play", true)
         showPosts = p.getBoolean("show_posts", true)
+        showShorts = p.getBoolean("show_shorts", true)
+        shortsAutoScroll = p.getBoolean("shorts_auto_scroll", false)
         searchHistory = p.getString("search_history", null)?.split('\n')?.filter { it.isNotBlank() }.orEmpty()
         theme = runCatching { Theme.valueOf(p.getString("theme", null) ?: "System") }.getOrDefault(Theme.System)
     }
@@ -48,6 +56,16 @@ object Settings {
     fun saveAmbientGlow(on: Boolean) {
         ambientGlow = on
         prefs?.edit()?.putBoolean("ambient_glow", on)?.apply()
+    }
+
+    fun saveShowShorts(on: Boolean) {
+        showShorts = on
+        prefs?.edit()?.putBoolean("show_shorts", on)?.apply()
+    }
+
+    fun saveShortsAutoScroll(on: Boolean) {
+        shortsAutoScroll = on
+        prefs?.edit()?.putBoolean("shorts_auto_scroll", on)?.apply()
     }
 
     fun saveShowPosts(on: Boolean) {

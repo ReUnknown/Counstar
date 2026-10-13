@@ -83,6 +83,18 @@ object WebApi {
     suspend fun browse(browseId: String, params: String? = null) =
         post("browse", JSONObject().put("browseId", browseId).apply { params?.let { put("params", it) } })
 
+    /**
+     * The Shorts that follow one, for swiping: [params] is a Short card's sequenceParams, the
+     * previous page's token, or [shortSequence] of a video ID.
+     */
+    suspend fun reelSequence(params: String) = post("reel/reel_watch_sequence", JSONObject().put("sequenceParams", params))
+
+    /** Sequence params for the Shorts after [videoId]: protobuf {1: videoId}, base64. */
+    fun shortSequence(videoId: String): String {
+        val raw = byteArrayOf(0x0A, videoId.length.toByte()) + videoId.toByteArray()
+        return java.util.Base64.getUrlEncoder().encodeToString(raw)
+    }
+
     suspend fun notifications() = post("notification/get_notification_menu", JSONObject().put("notificationsMenuRequestType", "NOTIFICATIONS_MENU_REQUEST_TYPE_INBOX"))
 
     /** The signed-in account's name, handle and photo. */

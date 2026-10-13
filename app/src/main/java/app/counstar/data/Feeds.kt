@@ -38,6 +38,9 @@ class Feed(
     /** Creators' posts, each placed after [Post.after] of [items]. */
     var posts by mutableStateOf<List<Post>>(emptyList())
         private set
+    /** Rows of Shorts, each placed after [ShortsShelf.after] of [items]. */
+    var shorts by mutableStateOf<List<ShortsShelf>>(emptyList())
+        private set
     private var continuation: String? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var job: Job? = null
@@ -59,6 +62,7 @@ class Feed(
                         if (page.chips.isNotEmpty()) chips = page.chips
                         channels = page.channels
                         posts = page.posts
+                        shorts = page.shorts
                         loadedOnce = true
                     }
                     .onFailure { error = "Couldn't load videos. Check your connection and try again." }
@@ -98,6 +102,7 @@ class Feed(
             if (first.chips.isNotEmpty()) chips = first.chips
             channels = first.channels
             posts = first.posts
+            shorts = first.shorts
             loadedOnce = true
             return true
         } finally {
@@ -119,6 +124,7 @@ class Feed(
                         val before = items.size
                         val seenPosts = posts.mapTo(HashSet()) { it.id }
                         posts = posts + page.posts.filter { it.id !in seenPosts }.map { it.copy(after = before + it.after) }
+                        shorts = shorts + page.shorts.map { it.copy(after = before + it.after) }
                         items = items + fresh
                         continuation = page.continuation?.takeIf { it != token && (fresh.isNotEmpty() || page.posts.isNotEmpty()) }
                     }
@@ -169,23 +175,35 @@ sealed interface FeedEntry {
     data class Channel(val channel: ChannelItem) : FeedEntry {
         override val key get() = "c" + channel.id
     }
+
+    data class Shorts(val shelf: ShortsShelf) : FeedEntry {
+        override val key get() = "s" + shelf.after + "-" + shelf.items.first().id
+    }
 }
 
 /**
  * [items] with [posts] and [channels] mixed in where they came ([Post.after]). Posts beyond the
  * videos (a Posts tab has only posts) follow at the end.
  */
-fun mix(items: List<VideoItem>, posts: List<Post> = emptyList(), channels: List<ChannelItem> = emptyList()): List<FeedEntry> {
-    // Posts turned off in Settings: never shown.
+fun mix(
+    items: List<VideoItem>,
+    posts: List<Post> = emptyList(),
+    channels: List<ChannelItem> = emptyList(),
+    shorts: List<ShortsShelf> = emptyList(),
+): List<FeedEntry> {
+    // Posts or Shorts turned off in Settings: never shown (Shorts among the videos too).
+    val hidden = if (Settings.showShorts) emptySet() else items.filter { it.isShort }.mapTo(HashSet()) { it.id }
     val postsAt = posts.takeIf { Settings.showPosts }.orEmpty().groupBy { it.after.coerceIn(0, items.size) }
     val channelsAt = channels.groupBy { it.after.coerceIn(0, items.size) }
+    val shortsAt = shorts.takeIf { Settings.showShorts }.orEmpty().filter { it.items.isNotEmpty() }.groupBy { it.after.coerceIn(0, items.size) }
     return buildList {
         for (i in 0..items.size) {
             channelsAt[i]?.forEach { add(FeedEntry.Channel(it)) }
             postsAt[i]?.forEach { add(FeedEntry.PostEntry(it)) }
-            items.getOrNull(i)?.let { add(FeedEntry.Video(it)) }
+            shortsAt[i]?.forEach { add(FeedEntry.Shorts(it)) }
+            items.getOrNull(i)?.takeIf { it.id !in hidden }?.let { add(FeedEntry.Video(it)) }
         }
-    }
+    }.distinctBy { it.key }
 }
 
 /**
@@ -214,11 +232,79 @@ class SortedFeed(private val base: Feed) {
     }
 }
 
+/**
+ * Shorts to swipe through: the one you opened (if any), then the ones YouTube lines up after it,
+ * a page at a time. With no Short to start from (the Shorts tab), it starts from one of your
+ * home feed's, or a Shorts search's.
+ */
+@androidx.compose.runtime.Stable
+class ShortsQueue(seed: VideoItem?) {
+    var items by mutableStateOf(listOfNotNull(seed?.copy(isShort = true)))
+        private set
+    var loading by mutableStateOf(false)
+        private set
+    var failed by mutableStateOf(false)
+        private set
+    private var next: String? = null
+    private var started = false
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    fun start() {
+        if (started) return
+        started = true
+        loading = true
+        scope.launch {
+            try {
+                val first = items.firstOrNull() ?: findSeed()?.also { items = listOf(it) }
+                if (first == null) {
+                    failed = true
+                    return@launch
+                }
+                page(first.sequenceParams ?: WebApi.shortSequence(first.id))
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    /** More, when you're near the end. */
+    fun loadMore() {
+        val token = next ?: return
+        if (loading) return
+        loading = true
+        scope.launch {
+            try {
+                page(token)
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    private suspend fun page(params: String) {
+        withContext(Dispatchers.IO) { WebApi.reelSequence(params).mapCatching(YouTubeParser::shortsSequence) }
+            .onSuccess { (more, token) ->
+                val seen = items.mapTo(HashSet()) { it.id }
+                items = items + more.filter { seen.add(it.id) }
+                next = token?.takeIf { it != params && more.isNotEmpty() }
+            }
+            .onFailure { next = null }
+    }
+
+    private suspend fun findSeed(): VideoItem? {
+        Feeds.home.shorts.firstOrNull()?.items?.firstOrNull()?.let { return it }
+        return withContext(Dispatchers.IO) { YouTube.rawSearch(query = "shorts").mapCatching { YouTubeParser.feed(it) } }
+            .getOrNull()?.shorts?.firstOrNull()?.items?.firstOrNull()
+    }
+}
+
 /** The account's feeds, kept while the app runs so switching tabs doesn't reload them. */
 object Feeds {
     var home = Feed.browse("FEwhat_to_watch"); private set
     var subscriptions = Feed.browse("FEsubscriptions"); private set
     var history = Feed.browse("FEhistory"); private set
+    /** The Shorts tab's Shorts. */
+    var shortsTab = ShortsQueue(null); private set
 
     /** The home chip that's selected (null: the first one, "All"), and its feed. */
     var homeChip by mutableStateOf<Chip?>(null); private set
@@ -247,6 +333,7 @@ object Feeds {
         home = Feed.browse("FEwhat_to_watch")
         subscriptions = Feed.browse("FEsubscriptions")
         history = Feed.browse("FEhistory")
+        shortsTab = ShortsQueue(null)
         homeChip = null
         homeChipFeed = null
         Library.clear()
