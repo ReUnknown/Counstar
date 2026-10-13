@@ -1,6 +1,7 @@
 package app.counstar.playback
 
 import android.content.Context
+import android.net.Uri
 import androidx.annotation.OptIn
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -8,6 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -132,12 +134,14 @@ object CounstarPlayer {
         })
     }
 
-    fun play(item: VideoItem) {
+    /** Plays [item], from [startAtMs] (a link's "t="), or carries on if it's already loaded. */
+    fun play(item: VideoItem, startAtMs: Long = 0L) {
         if (current?.id == item.id) {
+            if (startAtMs > 0L) player.seekTo(startAtMs)
             player.play()
             return
         }
-        load(item, startAt = 0L, isRetry = false)
+        load(item, startAt = startAtMs, isRetry = false)
     }
 
     /** Plays this video at [h] (null: automatic), from where it is now. */
@@ -211,6 +215,7 @@ object CounstarPlayer {
         if (current?.id != item.id) {
             storyboard = null
             heights = emptyList()
+            height = null
             pickedHeight = null
             StreamResolver.heightOverride = null
             captionTracks = emptyList()
@@ -230,7 +235,7 @@ object CounstarPlayer {
                     storyboard = Storyboard.parse(it.storyboardSpec)
                     if (it.heights.isNotEmpty()) heights = it.heights
                     height = it.height
-                    player.setMediaSource(mediaSource(it), startAt)
+                    player.setMediaSource(mediaSource(it, item), startAt)
                     player.setPlaybackSpeed(speed)
                     player.prepare()
                     player.play()
@@ -254,12 +259,23 @@ object CounstarPlayer {
         }
     }
 
-    private fun mediaSource(stream: VideoStream): MediaSource {
+    private fun mediaSource(stream: VideoStream, item: VideoItem): MediaSource {
+        // What the notification and lock screen show while it plays.
+        val metadata = MediaMetadata.Builder()
+            .setTitle(item.title)
+            .setArtist(item.channelName)
+            .setArtworkUri(item.thumbnail.takeIf { it.isNotBlank() }?.let(Uri::parse))
+            .build()
+        fun mediaItem(url: String, described: Boolean) = MediaItem.Builder()
+            .setUri(url)
+            .setMediaId(item.id)
+            .apply { if (described) setMediaMetadata(metadata) }
+            .build()
         if (stream.isHls) {
             val upstream = OkHttpDataSource.Factory(http).setDefaultRequestProperties(stream.headers)
-            return HlsMediaSource.Factory(upstream).createMediaSource(MediaItem.fromUri(stream.videoUrl))
+            return HlsMediaSource.Factory(upstream).createMediaSource(mediaItem(stream.videoUrl, described = true))
         }
-        fun part(url: String, length: Long): MediaSource {
+        fun part(url: String, length: Long, described: Boolean): MediaSource {
             val headers = buildMap {
                 putAll(stream.headers)
                 // StreamDataSource reads these to fetch the whole stream, in chunks when required.
@@ -268,13 +284,14 @@ object CounstarPlayer {
             }
             val upstream = OkHttpDataSource.Factory(http).setDefaultRequestProperties(headers)
             return ProgressiveMediaSource.Factory(StreamDataSource.Factory(upstream))
-                .createMediaSource(MediaItem.fromUri(url))
+                .createMediaSource(mediaItem(url, described))
         }
+        // The merged source takes its item (and so what the notification shows) from the first part.
         return MergingMediaSource(
             true,
             true,
-            part(stream.videoUrl, stream.videoLength),
-            part(stream.audioUrl, stream.audioLength),
+            part(stream.videoUrl, stream.videoLength, described = true),
+            part(stream.audioUrl, stream.audioLength, described = false),
         )
     }
 }

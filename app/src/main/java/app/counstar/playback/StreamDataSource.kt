@@ -11,14 +11,13 @@ import java.io.IOException
 import java.io.InterruptedIOException
 
 /**
- * Reads a YouTube audio stream all the way to its last byte.
+ * Reads a YouTube video or audio stream all the way to its last byte.
  *
  * YouTube sometimes cuts a download short: a dropped connection, a response that simply ends
  * early, or a stream that only answers bounded range requests. A plain HTTP read treats any of
- * those as the end of the song, so music stopped before it finished (and the cache then
- * remembered the song as shorter than it is). Because Counstar knows each stream's true size, this
- * keeps going instead: it resumes from the exact byte it stopped at, in chunks when the stream
- * requires them, until the whole song has arrived.
+ * those as the end of the stream, so the video would stop before it finished. Because Counstar
+ * knows each stream's true size, this keeps going instead: it resumes from the exact byte it
+ * stopped at, in chunks when the stream requires them, until the whole stream has arrived.
  *
  * The true size and chunk size arrive as the [LENGTH] and [CHUNK] request headers, which are
  * never sent upstream. Requests without them pass straight through.

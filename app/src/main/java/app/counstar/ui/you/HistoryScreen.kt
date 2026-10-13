@@ -1,5 +1,8 @@
 package app.counstar.ui.you
 
+import androidx.compose.ui.platform.LocalContext
+import app.counstar.ui.home.refreshFailed
+
 import androidx.activity.compose.BackHandler
 import app.counstar.ui.components.blockTouches
 import androidx.compose.foundation.background
@@ -54,12 +57,13 @@ fun HistoryScreen(bottomPadding: Dp) {
     BackHandler { Nav.historyOpen = false }
     val feed = Feeds.history
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var refreshing by remember { mutableStateOf(false) }
     LaunchedEffect(feed) { feed.load() }
     Page("History", onBack = { Nav.historyOpen = false }) {
         PullToRefreshBox(
             isRefreshing = refreshing,
-            onRefresh = { scope.launch { refreshing = true; feed.refresh(); refreshing = false } },
+            onRefresh = { scope.launch { refreshing = true; if (!feed.refresh()) refreshFailed(context); refreshing = false } },
             modifier = Modifier.fillMaxSize(),
         ) {
             VideoList(feed, bottomPadding, empty = "Videos you watch show up here.", dated = true)

@@ -1,5 +1,8 @@
 package app.counstar.ui.subscriptions
 
+import androidx.compose.ui.platform.LocalContext
+import app.counstar.ui.home.refreshFailed
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -77,6 +80,7 @@ private fun Filter.keeps(v: VideoItem): Boolean = when (this) {
 fun SubscriptionsScreen(contentPadding: PaddingValues, refreshOffset: Dp) {
     val feed = Feeds.subscriptions
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val haptics = rememberHaptics()
     LaunchedEffect(feed) { feed.load() }
     LaunchedEffect(Unit) { Channels.loadSubscriptions() }
@@ -105,7 +109,7 @@ fun SubscriptionsScreen(contentPadding: PaddingValues, refreshOffset: Dp) {
                 haptics.tick()
                 refreshing = true
                 Channels.loadSubscriptions(force = true)
-                feed.refresh()
+                if (!feed.refresh()) refreshFailed(context)
                 list.scrollToItem(0)
                 refreshing = false
             }

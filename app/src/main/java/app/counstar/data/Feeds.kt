@@ -67,15 +67,18 @@ class Feed(
     /**
      * Pull to refresh. YouTube hands back mostly the same first page for a while, so what you
      * haven't seen yet goes to the top (another page is fetched if there's too little new), and
-     * what you've already seen follows.
+     * what you've already seen follows. Returns false if it couldn't load (what's showing stays).
      */
-    suspend fun refresh() {
+    suspend fun refresh(): Boolean {
         val seen = items.mapTo(HashSet()) { it.id }
         job?.cancel()
         loading = true
         error = null
         try {
-            val first = parse { first() }.getOrNull() ?: return
+            val first = parse { first() }.getOrElse {
+                if (items.isEmpty()) error = "Couldn't load videos. Check your connection and try again."
+                return false
+            }
             var fresh = first.items.filter { it.id !in seen }
             var next = first.continuation
             var all = first.items
@@ -91,6 +94,7 @@ class Feed(
             if (first.chips.isNotEmpty()) chips = first.chips
             channels = first.channels
             loadedOnce = true
+            return true
         } finally {
             loading = false
         }

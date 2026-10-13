@@ -49,8 +49,8 @@ object Nav {
         this.tab = tab
     }
 
-    fun watch(item: VideoItem) {
-        CounstarPlayer.play(item)
+    fun watch(item: VideoItem, startAtMs: Long = 0L) {
+        CounstarPlayer.play(item, startAtMs)
         watchOpen = true
     }
 

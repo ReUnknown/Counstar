@@ -180,6 +180,7 @@ fun VideoSurface(modifier: Modifier = Modifier, contentScale: ContentScale = Con
                 if (view.isAvailable && player.videoSize.width > 0 && player.isPlaying) {
                     view.getBitmap(48, 27)?.let { Ambient.frame = it.asImageBitmap() }
                 }
+                // A little longer than AmbientLight's 650 ms fade, so each fade finishes before the next frame.
                 delay(700)
             }
         }

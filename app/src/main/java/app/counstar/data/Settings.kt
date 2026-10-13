@@ -21,6 +21,9 @@ object Settings {
         private set
     var maxHeight by mutableIntStateOf(1080)
         private set
+    /** Keep playing (as sound) when you leave Counstar or turn the screen off. */
+    var backgroundPlay by mutableStateOf(true)
+        private set
     var theme by mutableStateOf(Theme.System)
         private set
 
@@ -30,12 +33,18 @@ object Settings {
         prefs = p
         ambientGlow = p.getBoolean("ambient_glow", true)
         maxHeight = p.getInt("max_height", 1080)
+        backgroundPlay = p.getBoolean("background_play", true)
         theme = runCatching { Theme.valueOf(p.getString("theme", null) ?: "System") }.getOrDefault(Theme.System)
     }
 
     fun saveAmbientGlow(on: Boolean) {
         ambientGlow = on
         prefs?.edit()?.putBoolean("ambient_glow", on)?.apply()
+    }
+
+    fun saveBackgroundPlay(on: Boolean) {
+        backgroundPlay = on
+        prefs?.edit()?.putBoolean("background_play", on)?.apply()
     }
 
     fun saveMaxHeight(height: Int) {

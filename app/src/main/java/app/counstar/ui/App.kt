@@ -55,7 +55,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import android.widget.Toast
+import androidx.compose.runtime.snapshotFlow
 import app.counstar.data.Feeds
+import app.counstar.data.Links
 import app.counstar.data.Session
 import app.counstar.data.SessionRepository
 import app.counstar.data.Updater
@@ -157,6 +160,18 @@ private fun Shell(session: Session) {
         if (fullscreen) waitForUpright = true
         byRotation = false
         fullscreen = !fullscreen
+    }
+    // A YouTube link opened in or shared to Counstar.
+    LaunchedEffect(Unit) {
+        snapshotFlow { Links.pending }.collect { link ->
+            if (link == null) return@collect
+            Links.pending = null
+            when (val target = Links.resolve(link)) {
+                is Links.Target.Video -> Nav.watch(Links.video(target.id), startAtMs = target.startMs)
+                is Links.Target.Channel -> Nav.openChannel(target.id)
+                null -> Toast.makeText(context, "Counstar can't open that link", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
     // Who you are (name, photo, channel) is wanted all over: comments, You.
     LaunchedEffect(session) { if (session.cookie.isNotBlank()) app.counstar.data.Library.load() }

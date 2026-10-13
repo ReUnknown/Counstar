@@ -30,6 +30,8 @@ springy, physical motion.
 - Subscriptions, history and notifications
 - Search
 - Full-screen and floating mini player: the video keeps playing in the corner as you browse
+- Background play, with controls in the notification and on the lock screen
+- Opens YouTube links, or share one to Counstar from any app
 - Like and subscribe
 - Ambient glow on the watch page, taken live from the video
 - Up next with filters: everything, the same channel, or what you haven't watched
