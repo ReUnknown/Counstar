@@ -1,0 +1,14 @@
+# Development only: prints the shape of a few public YouTube responses (see .github/probe).
+name: Probe YouTube
+
+on:
+  push:
+    paths: [".github/probe/**"]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: python3 .github/probe/probe.py
