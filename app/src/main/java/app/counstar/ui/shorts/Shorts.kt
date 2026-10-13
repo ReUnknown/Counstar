@@ -195,6 +195,8 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
     val liked = ShortLikes.liked[item.id] ?: (details?.liked == true)
+    // The count without your like, so yours can be added or taken away as you tap.
+    val baseLikes = details?.likeCount?.let { it - if (details.liked) 1 else 0 }
 
     fun setLiked(want: Boolean) {
         if (YouTube.cookie.isNullOrBlank()) {
@@ -292,7 +294,6 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
             }
 
             // Like (a heart), comments, share.
-            val baseLikes = details?.likeCount?.let { it - if (details.liked) 1 else 0 }
             Column(
                 Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = bottomInset + 110.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
