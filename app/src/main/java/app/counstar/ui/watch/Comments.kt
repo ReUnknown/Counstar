@@ -315,7 +315,7 @@ fun CommentsPanel(
                     )
                 }
             } else {
-                Thread(open, browse = state.browse, onBack = { thread = null }, onClose = onClose)
+                Thread(open, browse = state.browse, onBack = { thread = null }, onClose = onClose ?: { thread = null })
             }
         }
     }
