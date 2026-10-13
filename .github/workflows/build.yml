@@ -1,7 +1,7 @@
 # Builds Counstar on GitHub's machines (they have the Android SDK; Gradle fetches the platform it needs).
 #
 # - Any branch push: a debug build, to check the code compiles.
-# - A version tag (v0.5.6): a release APK signed with Counstar's key, attached to a GitHub
+# - A version tag (v0.5.6), or running it by hand with "release" ticked: a release APK signed with Counstar's key, attached to a GitHub
 #   release. The key comes from two encrypted repository secrets and is never in the repo:
 #     KEYSTORE_BASE64      the .jks file, base64-encoded
 #     KEYSTORE_PROPERTIES  keystore/keystore.properties, as is
@@ -15,6 +15,11 @@ on:
     branches: ["**"]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      release:
+        description: Build the release (tagged v<versionName>)
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -27,7 +32,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.release == true }}
       HAS_KEY: ${{ secrets.KEYSTORE_BASE64 != '' && secrets.KEYSTORE_PROPERTIES != '' }}
     steps:
       - uses: actions/checkout@v5
@@ -47,11 +52,12 @@ jobs:
         if: env.RELEASE == 'true'
         run: |
           version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$version" != "$GITHUB_REF_NAME" ]; then
             echo "::error::Tag $GITHUB_REF_NAME doesn't match versionName $version"
             exit 1
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "TAG=v$version" >> "$GITHUB_ENV"
 
       - name: Restore the signing key
         if: env.RELEASE == 'true' && env.HAS_KEY == 'true'
@@ -91,7 +97,7 @@ jobs:
           "$ANDROID_HOME/build-tools/$tools/apksigner" verify "$apk"
           mkdir -p dist
           cp "$apk" "dist/Counstar-$VERSION.apk"
-          notes=".github/release-notes/$GITHUB_REF_NAME.md"
+          notes=".github/release-notes/$TAG.md"
           [ -f "$notes" ] && echo "NOTES=$notes" >> "$GITHUB_ENV" || true
 
       - name: Publish the release
@@ -99,6 +105,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: Counstar ${{ env.VERSION }}
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
           body_path: ${{ env.NOTES }}
           generate_release_notes: ${{ env.NOTES == '' }}
           files: dist/Counstar-${{ env.VERSION }}.apk
