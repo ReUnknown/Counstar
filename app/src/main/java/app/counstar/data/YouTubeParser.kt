@@ -23,6 +23,9 @@ data class VideoItem(
 
     /** "Channel · 1.2M views · 3 days ago", skipping what's missing. */
     val byline: String get() = listOfNotNull(channelName, views, published).joinToString(" · ")
+
+    /** Views the way YouTube's app shows them under a card: "77M" (with a play icon beside it). */
+    val shortViews: String? get() = views?.removeSuffix(" views")?.removeSuffix(" view")?.removeSuffix(" watching")?.trim()
 }
 
 /** A filter chip above a feed ("All", "Music", ...): selecting it loads [token]. */
@@ -30,6 +33,22 @@ data class Chip(val title: String, val token: String?, val selected: Boolean)
 
 /** One page of a feed, the token for the next page if there is one, and the feed's chips. */
 data class FeedPage(val items: List<VideoItem>, val continuation: String?, val chips: List<Chip> = emptyList())
+
+data class Comment(
+    val id: String,
+    val author: String,
+    val avatar: String?,
+    val text: String,
+    val time: String?,
+    val likes: String?,
+    val replies: String?,
+    val byCreator: Boolean,
+)
+
+data class CommentsPage(val count: String?, val comments: List<Comment>, val continuation: String?)
+
+/** A reason on YouTube's report form, and what to send to report for it. */
+data class ReportReason(val title: String, val params: String)
 
 /** One entry in the notifications inbox. */
 data class Notification(
@@ -61,6 +80,10 @@ data class WatchInfo(
     val bellOptions: List<BellOption>,
     /** "Most replayed" intensities across the video, 0..1, or empty. */
     val heatmap: List<Float>,
+    /** Loads the first page of comments. */
+    val commentsToken: String?,
+    /** Opens YouTube's report form for this video. */
+    val reportParams: String?,
     val related: List<VideoItem>,
 )
 
@@ -82,7 +105,10 @@ object YouTubeParser {
     )
 
     /** Things whose insides hold nothing more to find (and whose tokens aren't the page's). */
-    private val leaves = setOf("videoRenderer", "compactVideoRenderer", "lockupViewModel", "chipCloudChipRenderer", "notificationRenderer")
+    private val leaves = setOf(
+        "videoRenderer", "compactVideoRenderer", "lockupViewModel", "chipCloudChipRenderer", "notificationRenderer",
+        "sortFilterSubMenuRenderer", "commentRepliesRenderer",
+    )
 
     fun feed(json: String): FeedPage {
         val root = JSONObject(json)
@@ -93,6 +119,8 @@ object YouTubeParser {
             when (key) {
                 "chipCloudChipRenderer" -> (value as? JSONObject)?.let { chip ->
                     val title = text(chip.optJSONObject("text")) ?: return@let
+                    // A shortcut to YouTube's feed editor, not a filter.
+                    if ("custom feed" in title.lowercase() || title == "Shorts") return@let
                     chips += Chip(title, findFirst(chip, "continuationCommand")?.optString("token"), chip.optBoolean("isSelected"))
                 }
                 "videoRenderer", "compactVideoRenderer", "gridVideoRenderer", "playlistVideoRenderer" ->
@@ -142,8 +170,79 @@ object YouTubeParser {
             disliked = disliked,
             bellOptions = bellOptions(secondary?.optJSONObject("subscribeButton")),
             heatmap = heatmap(root),
+            commentsToken = results?.optJSONObject("results")?.let { r ->
+                var token: String? = null
+                walk(r) { key, value ->
+                    if (token == null && key == "itemSectionRenderer" && value is JSONObject &&
+                        value.optString("sectionIdentifier") == "comment-item-section"
+                    ) {
+                        token = findFirst(value, "continuationCommand")?.optString("token")
+                    }
+                }
+                token
+            },
+            reportParams = primary?.toString()?.let { Regex("PAabuse_report\"\\},\"globalConfiguration\":\\{\"params\":\"([^\"]+)").find(it)?.groupValues?.get(1) },
             related = related,
         )
+    }
+
+    /** A page of comments: new-style entity payloads, or old commentRenderers. */
+    fun comments(json: String): CommentsPage {
+        val root = JSONObject(json)
+        val list = mutableListOf<Comment>()
+        var count: String? = null
+        var continuation: String? = null
+        walk(root) { key, value ->
+            if (value !is JSONObject) return@walk
+            when (key) {
+                "commentsHeaderRenderer" -> count = text(value.optJSONObject("countText"))
+                "commentEntityPayload" -> {
+                    val props = value.optJSONObject("properties") ?: return@walk
+                    if (props.optInt("replyLevel") > 0) return@walk
+                    val author = value.optJSONObject("author")
+                    val toolbar = value.optJSONObject("toolbar")
+                    list += Comment(
+                        id = props.optString("commentId"),
+                        author = author?.optString("displayName").orEmpty(),
+                        avatar = author?.optString("avatarThumbnailUrl")?.takeIf { it.isNotBlank() }?.let(::fixUrl),
+                        text = props.optJSONObject("content")?.optString("content").orEmpty(),
+                        time = props.optString("publishedTime").takeIf { it.isNotBlank() },
+                        likes = toolbar?.optString("likeCountNotliked")?.takeIf { it.isNotBlank() && it != "0" },
+                        replies = toolbar?.optString("replyCount")?.takeIf { it.isNotBlank() && it != "0" },
+                        byCreator = author?.optBoolean("isCreator") == true,
+                    )
+                }
+                "commentRenderer" -> list += Comment(
+                    id = value.optString("commentId"),
+                    author = text(value.optJSONObject("authorText")).orEmpty(),
+                    avatar = bestThumbnail(value.optJSONObject("authorThumbnail")),
+                    text = text(value.optJSONObject("contentText")).orEmpty(),
+                    time = text(value.optJSONObject("publishedTimeText")),
+                    likes = text(value.optJSONObject("voteCount")),
+                    replies = value.optInt("replyCount").takeIf { it > 0 }?.toString(),
+                    byCreator = value.optBoolean("authorIsChannelOwner"),
+                )
+                "continuationItemRenderer" -> findFirst(value, "continuationCommand")?.optString("token")?.let { continuation = it }
+            }
+        }
+        return CommentsPage(count, list.distinctBy { it.id }, continuation)
+    }
+
+    /** The reasons on a report form (best effort: YouTube's form changes shape often). */
+    fun reportReasons(json: String): List<ReportReason> {
+        val reasons = mutableListOf<ReportReason>()
+        walk(JSONObject(json)) { _, value ->
+            if (value !is JSONObject) return@walk
+            val title = value.optJSONObject("title")?.optString("content")?.takeIf { it.isNotBlank() }
+                ?: text(value.optJSONObject("text"))
+                ?: value.optString("label").takeIf { it.isNotBlank() }
+                ?: return@walk
+            val params = listOf("flagEndpoint", "reportEndpoint", "submitReportEndpoint", "flagAction")
+                .firstNotNullOfOrNull { findFirst(value, it)?.optString("params")?.takeIf { p -> p.isNotBlank() } }
+                ?: return@walk
+            reasons += ReportReason(title, params)
+        }
+        return reasons.distinctBy { it.params }
     }
 
     fun notifications(json: String): List<Notification> {

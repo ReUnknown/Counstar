@@ -66,6 +66,10 @@ import app.counstar.ui.login.LoginScreen
 import app.counstar.ui.notifications.NotificationsScreen
 import app.counstar.ui.search.SearchScreen
 import app.counstar.ui.watch.MiniPlayer
+import app.counstar.ui.watch.MiniPlayerHeight
+import android.view.OrientationEventListener
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.animation.animateContentSize
 import app.counstar.ui.watch.WatchScreen
 import app.counstar.ui.welcome.WelcomeScreen
 import app.counstar.ui.you.YouScreen
@@ -81,17 +85,48 @@ fun CounstarApp() {
     when {
         !restored -> Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
         current == null && signingIn -> LoginScreen(onDone = { signingIn = false }, onCancel = { signingIn = false })
-        current == null -> WelcomeScreen(onSignIn = { signingIn = true }, onPreview = { SessionRepository.startPreview() })
+        current == null -> WelcomeScreen(onSignIn = { signingIn = true }, onPreview = {
+            Feeds.usePreviewHome()
+            SessionRepository.startPreview()
+        })
         else -> Shell(current)
     }
     UpdatePrompt()
 }
+
+/** The dock is close to solid, like YouTube's bar: frosted, but never murky. */
+private const val DOCK_TINT = 0.84f
 
 @Composable
 private fun Shell(session: Session) {
     var fullscreen by remember { mutableStateOf(false) }
     val activity = LocalActivity.current
     LaunchedEffect(Nav.watchOpen) { if (!Nav.watchOpen) fullscreen = false }
+    // Like YouTube: the app stays upright; the video goes full screen sideways. Turning the
+    // phone on its side while watching goes full screen, and turning it back comes out of it.
+    var byRotation by remember { mutableStateOf(false) }
+    var waitForUpright by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    DisposableEffect(Nav.watchOpen) {
+        val listener = object : OrientationEventListener(context) {
+            override fun onOrientationChanged(degrees: Int) {
+                if (degrees == ORIENTATION_UNKNOWN) return
+                val sideways = degrees in 65..115 || degrees in 245..295
+                val upright = degrees < 25 || degrees > 335
+                if (upright) waitForUpright = false
+                if (!Nav.watchOpen || waitForUpright) return
+                if (sideways && !fullscreen) {
+                    byRotation = true
+                    fullscreen = true
+                } else if (upright && fullscreen && byRotation) {
+                    byRotation = false
+                    fullscreen = false
+                }
+            }
+        }
+        if (Nav.watchOpen && listener.canDetectOrientation()) listener.enable()
+        onDispose { listener.disable() }
+    }
     LaunchedEffect(fullscreen) {
         val window = activity?.window ?: return@LaunchedEffect
         val bars = WindowCompat.getInsetsController(window, window.decorView)
@@ -100,9 +135,16 @@ private fun Shell(session: Session) {
             bars.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             bars.hide(WindowInsetsCompat.Type.systemBars())
         } else {
-            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             bars.show(WindowInsetsCompat.Type.systemBars())
         }
+    }
+    val toggleFullscreen = {
+        // Leaving full screen with the button while the phone is still sideways: don't jump
+        // straight back in until it's been upright.
+        if (fullscreen) waitForUpright = true
+        byRotation = false
+        fullscreen = !fullscreen
     }
     BackHandler(Nav.tab != Tab.Home && !Nav.searchOpen && !Nav.notificationsOpen && !Nav.watchOpen) { Nav.goTo(Tab.Home) }
 
@@ -111,7 +153,8 @@ private fun Shell(session: Session) {
     val systemNav = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val bottomBar = BottomBarHeight + systemNav
     val showMini = CounstarPlayer.current != null && !Nav.watchOpen
-    val bottom: Dp = bottomBar + if (showMini) 80.dp else 16.dp
+    val dock = bottomBar + if (showMini) MiniPlayerHeight else 0.dp
+    val bottom: Dp = dock + 16.dp
     val overlay = Nav.searchOpen || Nav.notificationsOpen
 
     // The top bar slides away as you scroll down and comes back as soon as you scroll up.
@@ -153,41 +196,44 @@ private fun Shell(session: Session) {
             if (Nav.notificationsOpen) NotificationsScreen(bottomPadding = bottom)
         }
 
-        // Top: the status bar is plain (only the watch page lets the video's glow through it);
-        // the top bar under it is frosted glass, as much of it as is showing.
+        // Top: one even pane of frosted glass from the very top of the screen down to the
+        // bottom of the top bar (as much of the bar as is showing). No solid strip, no fade.
         if (!overlay) {
             val barVisible = with(density) { (barPx + barOffset).toDp() }
-            Box(Modifier.padding(top = statusBar).fillMaxWidth().height(barVisible).clipToBounds()) {
-                BackdropBlurBand(backdrop, screenHeight, atBottom = false, modifier = Modifier.fillMaxWidth().height(barVisible + statusBar).offset(y = -statusBar))
-                Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surface.copy(alpha = FROSTED_TINT)))
-                Column(Modifier.offset { IntOffset(0, barOffset.roundToInt()) }) {
+            Box(Modifier.fillMaxWidth().height(statusBar + barVisible).clipToBounds()) {
+                BackdropBlurBand(backdrop, screenHeight, atBottom = false, modifier = Modifier.matchParentSize(), radius = 72.dp)
+                Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.background.copy(alpha = FROSTED_TINT)))
+                Column(Modifier.padding(top = statusBar).offset { IntOffset(0, barOffset.roundToInt()) }) {
                     TopBar(Nav.tab)
                     if (chips.isNotEmpty()) HomeChips(chips)
                 }
+                // The bar slides up under the status bar: keep its content out of the clock.
+                Box(Modifier.fillMaxWidth().height(statusBar).clipToBounds()) {
+                    BackdropBlurBand(backdrop, screenHeight, atBottom = false, modifier = Modifier.matchParentSize(), radius = 72.dp)
+                    Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.background.copy(alpha = FROSTED_TINT)))
+                }
+            }
+        } else {
+            Box(Modifier.fillMaxWidth().height(statusBar).background(MaterialTheme.colorScheme.background))
+        }
+
+        // Bottom: one frosted dock, all the way down behind the gesture area. While a video
+        // plays, the mini player rides in it, right above the tabs.
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(dock).animateContentSize()) {
+            BackdropBlurBand(backdrop, screenHeight, atBottom = true, modifier = Modifier.matchParentSize())
+            Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.background.copy(alpha = DOCK_TINT)))
+            Column(Modifier.align(Alignment.BottomCenter)) {
+                if (showMini) MiniPlayer()
+                BottomBar(session, systemNav)
             }
         }
-        Box(Modifier.fillMaxWidth().height(statusBar).background(MaterialTheme.colorScheme.background))
-
-        // Bottom: frosted glass too, all the way down behind the gesture area.
-        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(bottomBar)) {
-            BackdropBlurBand(backdrop, screenHeight, atBottom = true, modifier = Modifier.matchParentSize())
-            Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surface.copy(alpha = FROSTED_TINT)))
-            BottomBar(session, systemNav)
-        }
-
-        AnimatedVisibility(
-            showMini,
-            enter = fadeIn(tween(220)),
-            exit = fadeOut(tween(120)),
-            modifier = Modifier.align(Alignment.BottomCenter).padding(start = 8.dp, end = 8.dp, bottom = bottomBar + 8.dp),
-        ) { MiniPlayer() }
 
         AnimatedVisibility(
             Nav.watchOpen && CounstarPlayer.current != null,
             enter = slideInVertically(tween(380)) { it / 3 } + fadeIn(tween(200)),
             exit = slideOutVertically(tween(300)) { it / 3 } + fadeOut(tween(220)),
         ) {
-            WatchScreen(fullscreen = fullscreen, onToggleFullscreen = { fullscreen = !fullscreen })
+            WatchScreen(fullscreen = fullscreen, onToggleFullscreen = toggleFullscreen)
         }
     }
 }

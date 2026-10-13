@@ -71,6 +71,12 @@ object WebApi {
     /** Sets a channel's bell (all / personalized / none), using the params from that menu item. */
     suspend fun setChannelNotifications(params: String) = post("notification/modify_channel_preference", JSONObject().put("params", params))
 
+    /** YouTube's report form for a video (the "PAabuse_report" panel). */
+    suspend fun reportForm(params: String) = post("get_panel", JSONObject().put("panelId", "PAabuse_report").put("params", params))
+
+    /** Sends a report for the reason whose params came from [reportForm]. */
+    suspend fun report(params: String) = post("flag/flag", JSONObject().put("params", params))
+
     /** Adds to or removes from Watch later. */
     suspend fun watchLater(videoId: String, add: Boolean) = post(
         "browse/edit_playlist",

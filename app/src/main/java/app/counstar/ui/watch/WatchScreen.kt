@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -28,6 +29,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.NotificationsOff
@@ -155,6 +157,9 @@ private fun WatchDetails(item: VideoItem, details: WatchInfo?, raw: String?, fai
     var liked by remember(item.id, details) { mutableStateOf(details?.liked ?: false) }
     var disliked by remember(item.id, details) { mutableStateOf(details?.disliked ?: false) }
     var saved by remember(item.id) { mutableStateOf(false) }
+    var reporting by remember(item.id) { mutableStateOf(false) }
+    var commentsOpen by remember(item.id) { mutableStateOf(false) }
+    val comments = remember(details?.commentsToken) { details?.commentsToken?.let { CommentsState(it) } }
     val baseLikes = details?.likeCount?.let { it - if (details.liked) 1 else 0 }
 
     // Up next: the watch page's own list, plus chips to pull more. YouTube's own chips when it
@@ -192,8 +197,8 @@ private fun WatchDetails(item: VideoItem, details: WatchInfo?, raw: String?, fai
 
     val colors = MaterialTheme.colorScheme
     val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    // Where the chips sit in the list below: after the title, channel and actions.
-    val chipsIndex = 3
+    // Where the chips sit in the list below: after the title, channel, actions (and comments).
+    val chipsIndex = if (comments != null) 4 else 3
     val chipsStuck by remember(chips.size) { derivedStateOf { chips.isNotEmpty() && list.firstVisibleItemIndex >= chipsIndex } }
 
     @Composable
@@ -329,7 +334,13 @@ private fun WatchDetails(item: VideoItem, details: WatchInfo?, raw: String?, fai
                             scope.launch { WebApi.watchLater(item.id, want).onFailure { saved = !want } }
                         }
                     }
+                    item {
+                        Action(icon = Icons.Outlined.Flag, label = "Report") { reporting = true }
+                    }
                 }
+            }
+            if (comments != null) {
+                item(key = "comments") { CommentsCard(comments) { commentsOpen = true } }
             }
             if (chips.isNotEmpty()) {
                 item(key = "chips") { ChipsRow() }
@@ -348,6 +359,9 @@ private fun WatchDetails(item: VideoItem, details: WatchInfo?, raw: String?, fai
                 }
             }
         }
+
+        if (commentsOpen && comments != null) CommentsSheet(comments) { commentsOpen = false }
+        if (reporting) ReportDialog(item.id, details?.reportParams) { reporting = false }
 
         // Once the chips scroll up to the top, they stay there on frosted glass.
         if (chipsStuck) {
@@ -401,7 +415,12 @@ private fun SubscribeButton(channelId: String, initiallySubscribed: Boolean, opt
                 Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(18.dp))
             }
         }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, shape = RoundedCornerShape(20.dp)) {
+        DropdownMenu(
+            expanded = menu,
+            onDismissRequest = { menu = false },
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.widthIn(min = 260.dp),
+        ) {
             options.forEach { option ->
                 DropdownMenuItem(
                     text = { Text(option.title, fontWeight = if (option.kind == bell) FontWeight.Bold else FontWeight.Normal) },

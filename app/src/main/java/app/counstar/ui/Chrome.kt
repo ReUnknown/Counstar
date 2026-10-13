@@ -26,7 +26,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -39,7 +42,7 @@ import app.counstar.ui.home.CounstarLogo
 
 val TopBarHeight = 56.dp
 val ChipsHeight = 48.dp
-val BottomBarHeight = 50.dp
+val BottomBarHeight = 52.dp
 
 /** The top bar: Counstar on Home, the tab's name elsewhere, with notifications and search. */
 @Composable
@@ -117,13 +120,13 @@ fun BottomBar(session: Session, bottomInset: Dp) {
     ) {
         val searching = Nav.searchOpen || Nav.notificationsOpen
         BarItem("Home", Nav.tab == Tab.Home && !searching, Modifier.weight(1f), onClick = { Nav.goTo(Tab.Home) }) { on ->
-            Icon(if (on) Icons.Rounded.Home else Icons.Outlined.Home, contentDescription = null, modifier = Modifier.size(24.dp))
+            Icon(if (on) Icons.Rounded.Home else Icons.Outlined.Home, contentDescription = null, modifier = Modifier.size(25.dp))
         }
         BarItem("Subscriptions", Nav.tab == Tab.Subscriptions && !searching, Modifier.weight(1f), onClick = { Nav.goTo(Tab.Subscriptions) }) { on ->
-            Icon(if (on) Icons.Rounded.Subscriptions else Icons.Outlined.Subscriptions, contentDescription = null, modifier = Modifier.size(24.dp))
+            Icon(if (on) Icons.Rounded.Subscriptions else Icons.Outlined.Subscriptions, contentDescription = null, modifier = Modifier.size(25.dp))
         }
         BarItem("You", Nav.tab == Tab.You && !searching, Modifier.weight(1f), onClick = { Nav.goTo(Tab.You) }) { on ->
-            Avatar(session.photoUrl, 24.dp, ring = if (on) MaterialTheme.colorScheme.onSurface else null)
+            Avatar(session.photoUrl, 25.dp, ring = if (on) MaterialTheme.colorScheme.onSurface else null)
         }
     }
 }
@@ -138,12 +141,19 @@ private fun BarItem(label: String, selected: Boolean, modifier: Modifier, onClic
         verticalArrangement = Arrangement.Center,
     ) {
         icon(selected)
+        // Bright like YouTube's, and tucked right under the icon: every label readable, the
+        // current one bold.
         Text(
             label,
-            fontSize = 10.sp,
+            style = TextStyle(
+                fontSize = 11.sp,
+                lineHeight = 12.sp,
+                platformStyle = PlatformTextStyle(includeFontPadding = false),
+                lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both),
+            ),
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 3.dp),
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(top = 1.dp),
         )
     }
 }

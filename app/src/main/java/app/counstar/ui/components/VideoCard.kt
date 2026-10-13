@@ -15,7 +15,21 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import android.content.Intent
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.WatchLater
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
+import com.metrolist.innertube.WebApi
+import kotlinx.coroutines.launch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -108,19 +122,66 @@ fun VideoCard(item: VideoItem, onClick: () -> Unit, modifier: Modifier = Modifie
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Thumbnail(item, Modifier.fillMaxWidth(), corner = 0.dp)
-        Row(Modifier.padding(start = 12.dp, end = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Avatar(item.channelAvatar, 38.dp, ring = if (item.isLive) YouTubeRed else null)
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(Modifier.padding(start = 12.dp, end = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Avatar(item.channelAvatar, 40.dp, ring = if (item.isLive) YouTubeRed else null)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     item.title,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold, lineHeight = 21.sp),
+                    fontSize = 16.sp,
+                    lineHeight = 21.sp,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (item.byline.isNotBlank()) {
-                    Text(item.byline, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // YouTube's app: "Channel   ▷ 77M   4y ago", spaced out instead of dotted.
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    val meta = MaterialTheme.colorScheme.onSurfaceVariant
+                    item.channelName?.let { Text(it, fontSize = 13.sp, color = meta, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)) }
+                    item.shortViews?.let {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.PlayArrow, contentDescription = null, tint = meta, modifier = Modifier.size(15.dp))
+                            Text(it, fontSize = 13.sp, color = meta, maxLines = 1)
+                        }
+                    }
+                    item.published?.let { Text(it, fontSize = 13.sp, color = meta, maxLines = 1) }
                 }
             }
+            CardMenu(item)
+        }
+    }
+}
+
+/** ⋮ on a card: save it for later, or share it. */
+@Composable
+private fun CardMenu(item: VideoItem) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.Rounded.MoreVert, contentDescription = "More options", modifier = Modifier.size(20.dp))
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, shape = RoundedCornerShape(20.dp)) {
+            DropdownMenuItem(
+                text = { Text("Save to Watch later") },
+                leadingIcon = { Icon(Icons.Outlined.WatchLater, null) },
+                onClick = {
+                    open = false
+                    scope.launch { WebApi.watchLater(item.id, add = true) }
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Share") },
+                leadingIcon = { Icon(Icons.Rounded.Share, null) },
+                onClick = {
+                    open = false
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, "https://youtu.be/${item.id}")
+                    }
+                    context.startActivity(Intent.createChooser(send, null))
+                },
+            )
         }
     }
 }

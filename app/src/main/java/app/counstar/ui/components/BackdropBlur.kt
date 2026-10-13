@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
@@ -240,7 +241,7 @@ fun ProgressiveBackdropBlur(
 }
 
 /** How much of the surface color lies over frosted glass: enough to read on, light enough to see through. */
-const val FROSTED_TINT = 0.5f
+const val FROSTED_TINT = 0.58f
 
 /**
  * Frosted glass, like YouTube's bars: the content underneath, evenly blurred, in a band along the top or
@@ -254,23 +255,21 @@ fun BackdropBlurBand(
     modifier: Modifier = Modifier,
     radius: Dp = 48.dp,
 ) {
-    Box(modifier.clipToBounds()) {
-        LowResBlur(
-            radius = radius,
-            modifier = Modifier
-                .fillMaxWidth()
-                .wrapContentHeight(if (atBottom) Alignment.Bottom else Alignment.Top, unbounded = true)
-                .requiredHeight(fullHeight),
-        ) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .drawBehind {
-                        backdrop.version
-                        val f = backdrop.layer.size.width.let { if (it > 0) it / size.width else 1f }
-                        scale(1f / f, 1f / f, pivot = androidx.compose.ui.geometry.Offset.Zero) { drawLayer(backdrop.layer) }
-                    },
-            )
-        }
+    val fullPx = with(LocalDensity.current) { fullHeight.toPx() }
+    // Only this strip is blurred: the backdrop is shifted so the strip shows what's under it.
+    LowResBlur(radius = radius, modifier = modifier) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .drawBehind {
+                    backdrop.version
+                    val f = backdrop.layer.size.width.let { if (it > 0) it / size.width else 1f }
+                    val bandPx = size.height * f
+                    val shift = if (atBottom) -(fullPx - bandPx) else 0f
+                    scale(1f / f, 1f / f, pivot = androidx.compose.ui.geometry.Offset.Zero) {
+                        translate(top = shift) { drawLayer(backdrop.layer) }
+                    }
+                },
+        )
     }
 }

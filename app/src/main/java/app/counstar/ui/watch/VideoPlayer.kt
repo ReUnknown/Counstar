@@ -69,6 +69,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -99,6 +102,8 @@ class PlaybackState {
     var position by mutableLongStateOf(0L)
     var buffered by mutableLongStateOf(0L)
     var duration by mutableLongStateOf(0L)
+    /** Width / height of the picture (16:9 until the video says otherwise). */
+    var ratio by mutableFloatStateOf(16f / 9f)
 }
 
 @Composable
@@ -111,6 +116,8 @@ fun rememberPlaybackState(player: Player): PlaybackState {
             state.duration = player.duration.coerceAtLeast(0L)
             state.position = player.currentPosition.coerceAtLeast(0L)
             state.buffered = player.bufferedPosition.coerceAtLeast(0L)
+            val size = player.videoSize
+            if (size.width > 0 && size.height > 0) state.ratio = size.width * size.pixelWidthHeightRatio / size.height
         }
         val listener = object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) = sync()
@@ -154,7 +161,7 @@ fun VideoSurface(modifier: Modifier = Modifier, contentScale: ContentScale = Con
         LaunchedEffect(texture) {
             val view = texture ?: return@LaunchedEffect
             while (true) {
-                if (view.isAvailable && player.videoSize.width > 0) {
+                if (view.isAvailable && player.videoSize.width > 0 && player.isPlaying) {
                     view.getBitmap(48, 27)?.let { Ambient.frame = it.asImageBitmap() }
                 }
                 delay(700)
@@ -181,7 +188,9 @@ fun AmbientLight(fallback: String?, modifier: Modifier = Modifier, strength: Flo
         fade.animateTo(1f, tween(650))
     }
     Box(modifier.alpha(strength)) {
-        val look = Modifier.matchParentSize().blur(blur, BlurredEdgeTreatment.Unbounded)
+        // Rectangle edges: the blur holds solid to the border, so overlapping frames never
+        // brighten or dim at the edges while one fades in.
+        val look = Modifier.matchParentSize().blur(blur, BlurredEdgeTreatment.Rectangle)
         val before = previous
         val now = shown
         when {
@@ -196,7 +205,8 @@ fun AmbientLight(fallback: String?, modifier: Modifier = Modifier, strength: Flo
 
 /**
  * The video with YouTube's controls: tap to show them, play/pause in the middle, skip 10 seconds
- * either side, and the seek bar along the bottom.
+ * either side, and the seek bar along the bottom. In full screen everything (controls included)
+ * sits on the picture itself, with the video's glow in the bars around it.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -210,92 +220,99 @@ fun VideoPlayer(
     val player = CounstarPlayer.player
     val state = rememberPlaybackState(player)
     var controls by remember { mutableStateOf(true) }
-    var scrubbing by remember { mutableStateOf(false) }
-    LaunchedEffect(controls, state.playing, scrubbing) {
-        if (controls && state.playing && !scrubbing) {
+    var scrubAt by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(controls, state.playing, scrubAt) {
+        if (controls && state.playing && scrubAt == null) {
             delay(3_000)
             controls = false
         }
     }
-    Box(
-        modifier
-            .background(Color.Black)
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { controls = !controls },
-    ) {
-        // Full screen: the glow fills the black bars around the picture, softly.
+    Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
         if (fullscreen) AmbientLight(CounstarPlayer.current?.thumbnail, Modifier.fillMaxSize(), strength = 0.45f, blur = 48.dp)
-        VideoSurface(Modifier.fillMaxSize(), sampleAmbient = true)
+        Box(
+            (if (fullscreen) Modifier.fillMaxHeight().aspectRatio(state.ratio, matchHeightConstraintsFirst = true) else Modifier.fillMaxSize())
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { controls = !controls },
+        ) {
+            VideoSurface(Modifier.fillMaxSize(), sampleAmbient = true)
 
-        val loading = CounstarPlayer.loading || state.buffering
-        if (loading && CounstarPlayer.error == null && !scrubbing) {
-            LoadingIndicator(Modifier.align(Alignment.Center).size(64.dp), color = Color.White)
-        }
-        CounstarPlayer.error?.let {
-            Text(it, color = Color.White, modifier = Modifier.align(Alignment.Center).padding(24.dp))
-        }
+            // Scrubbing: the frame you're on takes the video's place, full size, like newer YouTube.
+            val target = scrubAt
+            val storyboard = CounstarPlayer.storyboard
+            if (target != null && storyboard != null) {
+                StoryboardFrame(storyboard, target, state.duration.coerceAtLeast(1L))
+            }
 
-        AnimatedVisibility(controls || scrubbing, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = if (scrubbing) 0.15f else 0.35f))) {
-                if (!scrubbing) {
-                    Row(Modifier.fillMaxWidth().padding(4.dp)) {
-                        if (onMinimize != null) {
-                            IconButton(onClick = onMinimize) {
-                                Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Minimize", tint = Color.White)
+            val loading = CounstarPlayer.loading || state.buffering
+            if (loading && CounstarPlayer.error == null && target == null) {
+                LoadingIndicator(Modifier.align(Alignment.Center).size(64.dp), color = Color.White)
+            }
+            CounstarPlayer.error?.let {
+                Text(it, color = Color.White, modifier = Modifier.align(Alignment.Center).padding(24.dp))
+            }
+
+            AnimatedVisibility(controls || target != null, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = if (target != null) 0.1f else 0.35f))) {
+                    if (target == null) {
+                        Row(Modifier.fillMaxWidth().padding(4.dp)) {
+                            if (onMinimize != null) {
+                                IconButton(onClick = onMinimize) {
+                                    Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Minimize", tint = Color.White)
+                                }
                             }
                         }
-                    }
-                    if (!loading) {
-                        Row(
-                            Modifier.align(Alignment.Center),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(28.dp),
-                        ) {
-                            GlassButton(onClick = { player.seekTo((player.currentPosition - 10_000).coerceAtLeast(0)) }) {
-                                Icon(Icons.Rounded.Replay10, contentDescription = "Back 10 seconds", tint = Color.White)
-                            }
-                            Box(
-                                Modifier
-                                    .size(68.dp)
-                                    .clip(RoundedCornerShape(24.dp))
-                                    .background(Color.White.copy(alpha = 0.92f))
-                                    .clickable { if (player.isPlaying) player.pause() else player.play() },
-                                contentAlignment = Alignment.Center,
+                        if (!loading) {
+                            Row(
+                                Modifier.align(Alignment.Center),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(28.dp),
                             ) {
-                                PlayPauseIcon(playing = state.playing, tint = Color(0xFF111318), size = 30.dp)
-                            }
-                            GlassButton(onClick = { player.seekTo(player.currentPosition + 10_000) }) {
-                                Icon(Icons.Rounded.Forward10, contentDescription = "Forward 10 seconds", tint = Color.White)
+                                GlassButton(onClick = { player.seekTo((player.currentPosition - 10_000).coerceAtLeast(0)) }) {
+                                    Icon(Icons.Rounded.Replay10, contentDescription = "Back 10 seconds", tint = Color.White)
+                                }
+                                Box(
+                                    Modifier
+                                        .size(68.dp)
+                                        .clip(RoundedCornerShape(24.dp))
+                                        .background(Color.White.copy(alpha = 0.92f))
+                                        .clickable { if (player.isPlaying) player.pause() else player.play() },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    PlayPauseIcon(playing = state.playing, tint = Color(0xFF111318), size = 30.dp)
+                                }
+                                GlassButton(onClick = { player.seekTo(player.currentPosition + 10_000) }) {
+                                    Icon(Icons.Rounded.Forward10, contentDescription = "Forward 10 seconds", tint = Color.White)
+                                }
                             }
                         }
                     }
-                }
-                Column(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp)
-                        .padding(bottom = if (fullscreen) 20.dp else 2.dp),
-                ) {
-                    if (!scrubbing) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "${formatTime(state.position)} / ${formatTime(state.duration)}",
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(start = 6.dp),
-                            )
-                            Spacer(Modifier.weight(1f))
-                            IconButton(onClick = onToggleFullscreen) {
-                                Icon(
-                                    if (fullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
-                                    contentDescription = if (fullscreen) "Exit full screen" else "Full screen",
-                                    tint = Color.White,
+                    Column(
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                            .padding(bottom = if (fullscreen) 10.dp else 2.dp),
+                    ) {
+                        if (target == null) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "${formatTime(state.position)} / ${formatTime(state.duration)}",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(start = 6.dp),
                                 )
+                                Spacer(Modifier.weight(1f))
+                                IconButton(onClick = onToggleFullscreen) {
+                                    Icon(
+                                        if (fullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                                        contentDescription = if (fullscreen) "Exit full screen" else "Full screen",
+                                        tint = Color.White,
+                                    )
+                                }
                             }
                         }
+                        SeekBar(state, heatmap, onScrub = { scrubAt = it })
                     }
-                    SeekBar(state, heatmap, onScrubbing = { scrubbing = it })
                 }
             }
         }
@@ -303,12 +320,12 @@ fun VideoPlayer(
 }
 
 /**
- * YouTube's seek bar, nicer: thin until you touch it, buffered in gray, played in red. Drag
- * anywhere along it; while you do, the frame you're on, its time and the "most replayed" wave
- * rise above it.
+ * The seek bar: a red line with a line-shaped handle (Material's expressive slider), buffered
+ * in gray. Tap to jump or drag along it; while you drag it thickens, the time follows your
+ * finger, and the "most replayed" wave rises above it.
  */
 @Composable
-private fun SeekBar(state: PlaybackState, heatmap: List<Float>, onScrubbing: (Boolean) -> Unit) {
+private fun SeekBar(state: PlaybackState, heatmap: List<Float>, onScrub: (Long?) -> Unit) {
     val player = CounstarPlayer.player
     val scope = rememberCoroutineScope()
     var dragging by remember { mutableStateOf(false) }
@@ -316,82 +333,87 @@ private fun SeekBar(state: PlaybackState, heatmap: List<Float>, onScrubbing: (Bo
     val duration = state.duration.coerceAtLeast(1L)
     val shown = if (dragging) fraction else state.position.toFloat() / duration
     val buffered = state.buffered.toFloat() / duration
-    val track by animateDpAsState(if (dragging) 6.dp else 3.dp, label = "track")
-    val thumb by animateDpAsState(if (dragging) 18.dp else 12.dp, label = "thumb")
+    val track by animateDpAsState(if (dragging) 7.dp else 4.dp, label = "track")
+    val handle by animateDpAsState(if (dragging) 26.dp else 18.dp, label = "handle")
 
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val widthPx = constraints.maxWidth.toFloat()
-        if (dragging) {
-            ScrubPreview(
-                positionMs = (fraction * duration).toLong(),
-                durationMs = duration,
-                storyboard = CounstarPlayer.storyboard,
-                heatmap = heatmap,
-                anchorX = fraction * widthPx,
-                barWidthPx = widthPx,
-            )
-        }
-        Box(
-            Modifier
-                .padding(top = if (dragging) PREVIEW_HEIGHT else 0.dp)
-                .fillMaxWidth()
-                .height(28.dp)
-                .pointerInput(duration) {
-                    detectTapGestures { offset ->
-                        player.seekTo(((offset.x / size.width).coerceIn(0f, 1f) * duration).toLong())
+        Column {
+            if (dragging) ScrubInfo((fraction * duration).toLong(), heatmap, fraction * widthPx, widthPx)
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(32.dp)
+                    .pointerInput(duration) {
+                        detectTapGestures { offset ->
+                            player.seekTo(((offset.x / size.width).coerceIn(0f, 1f) * duration).toLong())
+                        }
                     }
-                }
-                .pointerInput(duration) {
-                    detectHorizontalDragGestures(
-                        onDragStart = { offset ->
-                            dragging = true
-                            onScrubbing(true)
-                            fraction = (offset.x / size.width).coerceIn(0f, 1f)
-                        },
-                        onDragEnd = {
-                            player.seekTo((fraction * duration).toLong())
-                            scope.launch {
-                                delay(150)
+                    .pointerInput(duration) {
+                        detectHorizontalDragGestures(
+                            onDragStart = { offset ->
+                                dragging = true
+                                fraction = (offset.x / size.width).coerceIn(0f, 1f)
+                                onScrub((fraction * duration).toLong())
+                            },
+                            onDragEnd = {
+                                player.seekTo((fraction * duration).toLong())
+                                scope.launch {
+                                    delay(120)
+                                    dragging = false
+                                    onScrub(null)
+                                }
+                            },
+                            onDragCancel = {
                                 dragging = false
-                                onScrubbing(false)
-                            }
-                        },
-                        onDragCancel = {
-                            dragging = false
-                            onScrubbing(false)
-                        },
-                        onHorizontalDrag = { change, amount ->
-                            change.consume()
-                            fraction = (fraction + amount / size.width).coerceIn(0f, 1f)
-                        },
+                                onScrub(null)
+                            },
+                            onHorizontalDrag = { change, amount ->
+                                change.consume()
+                                fraction = (fraction + amount / size.width).coerceIn(0f, 1f)
+                                onScrub((fraction * duration).toLong())
+                            },
+                        )
+                    },
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Canvas(Modifier.fillMaxWidth().height(handle)) {
+                    val h = track.toPx()
+                    val y = (size.height - h) / 2
+                    val r = CornerRadius(h / 2, h / 2)
+                    val handleW = 4.dp.toPx()
+                    val gap = 3.dp.toPx()
+                    val x = (size.width * shown.coerceIn(0f, 1f)).coerceIn(handleW / 2, size.width - handleW / 2)
+                    // Inactive, then buffered, to the right of the handle; played to its left.
+                    val restStart = x + handleW / 2 + gap
+                    if (restStart < size.width) {
+                        drawRoundRect(Color.White.copy(alpha = 0.28f), Offset(restStart, y), Size(size.width - restStart, h), r)
+                        val bufferedEnd = size.width * buffered.coerceIn(0f, 1f)
+                        if (bufferedEnd > restStart) {
+                            drawRoundRect(Color.White.copy(alpha = 0.55f), Offset(restStart, y), Size(bufferedEnd - restStart, h), r)
+                        }
+                    }
+                    val playedEnd = x - handleW / 2 - gap
+                    if (playedEnd > 0f) drawRoundRect(YouTubeRed, Offset(0f, y), Size(playedEnd, h), r)
+                    drawRoundRect(
+                        YouTubeRed,
+                        Offset(x - handleW / 2, 0f),
+                        Size(handleW, size.height),
+                        CornerRadius(handleW / 2, handleW / 2),
                     )
-                },
-            contentAlignment = Alignment.CenterStart,
-        ) {
-            Canvas(Modifier.fillMaxWidth().height(thumb)) {
-                val h = track.toPx()
-                val y = (size.height - h) / 2
-                val r = CornerRadius(h / 2, h / 2)
-                drawRoundRect(Color.White.copy(alpha = 0.28f), Offset(0f, y), Size(size.width, h), r)
-                drawRoundRect(Color.White.copy(alpha = 0.55f), Offset(0f, y), Size(size.width * buffered.coerceIn(0f, 1f), h), r)
-                drawRoundRect(YouTubeRed, Offset(0f, y), Size(size.width * shown.coerceIn(0f, 1f), h), r)
-                val t = thumb.toPx()
-                drawCircle(YouTubeRed, radius = t / 2, center = Offset((size.width * shown).coerceIn(t / 2, size.width - t / 2), size.height / 2))
+                }
             }
         }
     }
 }
 
-private val PREVIEW_HEIGHT = 156.dp
-
-/** The frame you're scrubbing to (from YouTube's storyboard), its time, and the replay wave. */
+/** While scrubbing: the time over the handle, and the "most replayed" wave across the bar. */
 @Composable
-private fun ScrubPreview(positionMs: Long, durationMs: Long, storyboard: Storyboard?, heatmap: List<Float>, anchorX: Float, barWidthPx: Float) {
-    val previewWidth = 160.dp
-    val previewPx = with(LocalDensity.current) { previewWidth.toPx() }
-    val left = (anchorX - previewPx / 2).coerceIn(0f, (barWidthPx - previewPx).coerceAtLeast(0f))
-    Box(Modifier.fillMaxWidth().height(PREVIEW_HEIGHT)) {
-        // "Most replayed": a soft wave across the whole bar, just above it.
+private fun ScrubInfo(positionMs: Long, heatmap: List<Float>, anchorX: Float, barWidthPx: Float) {
+    val bubbleWidth = 76.dp
+    val bubblePx = with(LocalDensity.current) { bubbleWidth.toPx() }
+    val left = (anchorX - bubblePx / 2).coerceIn(0f, (barWidthPx - bubblePx).coerceAtLeast(0f))
+    Box(Modifier.fillMaxWidth().height(64.dp)) {
         if (heatmap.size > 2) {
             Canvas(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(36.dp)) {
                 val path = Path()
@@ -409,31 +431,19 @@ private fun ScrubPreview(positionMs: Long, durationMs: Long, storyboard: Storybo
                 drawPath(path, Color.White.copy(alpha = 0.3f))
             }
         }
-        Column(
-            Modifier.offset { IntOffset(left.roundToInt(), 0) }.width(previewWidth),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Box(
-                Modifier
-                    .width(previewWidth)
-                    .height(90.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Color.Black),
-            ) {
-                if (storyboard != null) StoryboardFrame(storyboard, positionMs, durationMs)
-            }
-            Text(
-                formatTime(positionMs),
-                color = Color.White,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier
-                    .padding(top = 6.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color.Black.copy(alpha = 0.55f))
-                    .padding(horizontal = 10.dp, vertical = 3.dp),
-            )
-        }
+        Text(
+            formatTime(positionMs),
+            color = Color.White,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .offset { IntOffset(left.roundToInt(), 0) }
+                .width(bubbleWidth)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.Black.copy(alpha = 0.6f))
+                .padding(vertical = 4.dp),
+        )
     }
 }
 

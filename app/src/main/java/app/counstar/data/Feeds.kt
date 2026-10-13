@@ -121,6 +121,11 @@ object Feeds {
         homeChipFeed = Feed.browseFrom(token)
     }
 
+    /** Debug preview (not signed in): YouTube has no home feed for guests, so show a search. */
+    fun usePreviewHome() {
+        home = search("popular videos this week")
+    }
+
     fun search(query: String) = Feed({ YouTube.rawSearch(query = query) }, { WebApi.searchContinuation(it) })
 
     /** Forget everything (signing out). */
