@@ -44,52 +44,34 @@ def first(o, key):
         if k == key: return v
     return None
 
-# A. A short through /next: the owner (name, picture).
-shorts = call("browse", {"browseId": "UCX6OQ3DkcsbYNE6H8uQQuVA", "params": "EgZzaG9ydHPyBgUKA5oBAA%3D%3D"})
-show("channel shorts tab lockup", first(shorts, "shortsLockupViewModel"), 90)
-sid = None
-for k, v in walk(shorts):
-    if k == "reelWatchEndpoint" and isinstance(v, dict) and v.get("videoId"): sid = v["videoId"]; break
-print("short id:", sid)
-n = call("next", {"videoId": sid})
-show("short next videoOwnerRenderer", first(n, "videoOwnerRenderer"), 60)
+import base64
 
-# B. A run of shorts to swipe through.
-w = call("reel/reel_item_watch", {"playerRequest": {"videoId": sid}, "params": "CA8%3D", "disablePlayerResponse": True})
-print("\nreel_item_watch keys:", list(w.keys()))
-seq = w.get("sequenceContinuation")
-print("sequenceContinuation:", (seq or "")[:80])
-show("reel_item_watch overlay", w.get("overlay"), 50)
-if seq:
-    q = call("reel/reel_watch_sequence", {"sequenceParams": seq})
-    print("\nreel_watch_sequence keys:", list(q.keys()), "entries:", len(q.get("entries", [])))
-    show("first entry", (q.get("entries") or [None])[0], 40)
-    print("continuation:", str(q.get("continuationEndpoint") or q.get("continuation"))[:200])
-# Without a seed: what the Shorts tab would start from.
-try:
-    q0 = call("reel/reel_watch_sequence", {"sequenceParams": "CA8%3D"})
-    print("\nunseeded sequence entries:", len(q0.get("entries", [])))
-except Exception as e:
-    print("unseeded sequence error:", e)
+def seq_for(video_id):
+    # protobuf {1: video_id}, the start of the sequenceParams YouTube puts on a Short's card.
+    raw = bytes([0x0A, len(video_id)]) + video_id.encode()
+    return base64.urlsafe_b64encode(raw).decode()
 
-# C. Shorts in search results and home-like shelves.
-s = call("search", {"query": "mrbeast"})
-show("search shorts shelf (gridShelfViewModel)", first(s, "gridShelfViewModel"), 80)
-s2 = call("search", {"query": "funny cats"})
-print("\nfunny cats has reelShelfRenderer:", first(s2, "reelShelfRenderer") is not None, " shortsLockupViewModel:", first(s2, "shortsLockupViewModel") is not None)
-
-# D. Audio tracks (dubbed videos).
-for name, client, ua in [
-    ("ANDROID_VR", {"clientName": "ANDROID_VR", "clientVersion": "1.65.10", "androidSdkVersion": 32, "osName": "Android", "osVersion": "12L"}, "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip"),
-    ("IOS", {"clientName": "IOS", "clientVersion": "21.26.4", "deviceModel": "iPhone16,2", "osName": "iPhone", "osVersion": "18.3.2.22D82"}, "com.google.ios.youtube/21.26.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)"),
-]:
+sid = "aNI2jv7lBPQ"
+for label, params in [("built from id", seq_for(sid))]:
     try:
-        r = call("player", {"videoId": "0e3GPea1Tyg", "contentCheckOk": True, "racyCheckOk": True}, dict(client, hl="en", gl="US"), {"User-Agent": ua})
-        st = r.get("playabilityStatus", {})
-        tracks = {}
-        for f in r.get("streamingData", {}).get("adaptiveFormats", []):
-            if "audioTrack" in f: tracks[f["audioTrack"].get("id")] = f["audioTrack"]
-        print(f"\n{name}: {st.get('status')} {st.get('reason','')[:50]} audio tracks: {len(tracks)}")
-        for t in list(tracks.values())[:3]: print("  ", t)
+        q = call("reel/reel_watch_sequence", {"sequenceParams": params})
+        entries = q.get("entries", [])
+        print(f"\n{label}: keys {list(q.keys())} entries {len(entries)}")
+        print("  first ids:", [first(e, "videoId") for e in entries[:6]])
+        show("  entry 0", entries[0] if entries else None, 30)
+        show("  continuation", q.get("continuationEndpoint"), 20)
+        tok = first(q.get("continuationEndpoint"), "token") or first(q.get("continuationEndpoint"), "sequenceParams")
+        if tok:
+            q2 = call("reel/reel_watch_sequence", {"sequenceParams": tok})
+            print("  next page entries:", len(q2.get("entries", [])), [first(e, "videoId") for e in q2.get("entries", [])[:4]])
     except Exception as e:
-        print(name, "error", e)
+        print(label, "error", e)
+
+for label, body in [("item_watch no id", {"params": "CA8%3D"}), ("FEshorts browse", None)]:
+    try:
+        r = call("reel/reel_item_watch", body) if body else call("browse", {"browseId": "FEshorts"})
+        print(f"\n{label}: keys {list(r.keys())[:12]}")
+        print("  replacementEndpoint:", json.dumps(trim(r.get("replacementEndpoint")))[:300])
+        print("  any videoId:", first(r, "videoId"))
+    except Exception as e:
+        print(label, "error", e)
