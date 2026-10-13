@@ -184,7 +184,10 @@ fun VideoSurface(modifier: Modifier = Modifier, contentScale: ContentScale = Con
             val view = texture ?: return@LaunchedEffect
             while (true) {
                 if (view.isAvailable && player.videoSize.width > 0 && player.isPlaying) {
-                    view.getBitmap(48, 27)?.let { Ambient.frame = it.asImageBitmap() }
+                    // Small, in the video's own shape (a Short is tall), for blurring.
+                    val size = player.videoSize
+                    val h = (48f * size.height / size.width.coerceAtLeast(1)).toInt().coerceIn(16, 96)
+                    view.getBitmap(48, h)?.let { Ambient.frame = it.asImageBitmap() }
                 }
                 // A little longer than AmbientLight's 650 ms fade, so each fade finishes before the next frame.
                 delay(700)

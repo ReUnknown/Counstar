@@ -1,5 +1,10 @@
 package app.counstar.ui.you
 
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Close
+
 import androidx.compose.ui.platform.LocalContext
 import app.counstar.ui.home.refreshFailed
 
@@ -50,12 +55,24 @@ import app.counstar.ui.Nav
 import app.counstar.ui.components.VideoRow
 import kotlinx.coroutines.launch
 
-/** Everything you've watched, newest first, under the dates YouTube files it by. */
+/**
+ * Everything you've watched, newest first, under the dates YouTube files it by: search it at
+ * the top, the Shorts you watched in a row of their own, then the videos.
+ */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(bottomPadding: Dp) {
-    BackHandler { Nav.historyOpen = false }
-    val feed = Feeds.history
+    var query by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
+    var searched by remember { mutableStateOf<app.counstar.data.Feed?>(null) }
+    BackHandler {
+        if (searched != null) {
+            searched = null
+            query = ""
+        } else {
+            Nav.historyOpen = false
+        }
+    }
+    val feed = searched ?: Feeds.history
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var refreshing by remember { mutableStateOf(false) }
@@ -66,7 +83,65 @@ fun HistoryScreen(bottomPadding: Dp) {
             onRefresh = { scope.launch { refreshing = true; if (!feed.refresh()) refreshFailed(context); refreshing = false } },
             modifier = Modifier.fillMaxSize(),
         ) {
-            VideoList(feed, bottomPadding, empty = "Videos you watch show up here.", dated = true)
+            VideoList(
+                feed,
+                bottomPadding,
+                empty = if (searched != null) "Nothing you've watched matches \"$query\"." else "Videos you watch show up here.",
+                dated = searched == null,
+                header = {
+                    item(key = "search") {
+                        HistorySearch(
+                            query,
+                            onQuery = { query = it },
+                            onSearch = { searched = query.trim().takeIf { q -> q.isNotEmpty() }?.let { q -> app.counstar.data.Feed.historySearch(q) } },
+                            onClear = {
+                                query = ""
+                                searched = null
+                            },
+                        )
+                    }
+                    val shorts = feed.shorts.flatMap { it.items }.distinctBy { it.id }
+                    if (app.counstar.data.Settings.showShorts && shorts.isNotEmpty()) {
+                        item(key = "shorts") {
+                            app.counstar.ui.shorts.ShortsRow(app.counstar.data.ShortsShelf(shorts, 0, "Shorts you watched"), Modifier.padding(top = 4.dp, bottom = 12.dp))
+                        }
+                    }
+                },
+            )
+        }
+    }
+}
+
+/** The box at the top of History: search what you've watched. */
+@Composable
+private fun HistorySearch(query: String, onQuery: (String) -> Unit, onSearch: () -> Unit, onClear: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .fillMaxWidth()
+            .height(52.dp)
+            .clip(RoundedCornerShape(26.dp))
+            .background(colors.surfaceContainerHigh)
+            .padding(start = 16.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(androidx.compose.material.icons.Icons.Rounded.Search, contentDescription = null, tint = colors.onSurfaceVariant)
+        Box(Modifier.weight(1f).padding(start = 12.dp)) {
+            if (query.isEmpty()) Text("Search your history", color = colors.onSurfaceVariant, fontSize = 16.sp)
+            androidx.compose.foundation.text.BasicTextField(
+                value = query,
+                onValueChange = onQuery,
+                singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(color = colors.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(colors.primary),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { onSearch() }),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (query.isNotEmpty()) {
+            IconButton(onClick = onClear) { Icon(androidx.compose.material.icons.Icons.Rounded.Close, contentDescription = "Clear") }
         }
     }
 }

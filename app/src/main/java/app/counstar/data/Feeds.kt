@@ -152,6 +152,12 @@ class Feed(
         /** A channel's videos tab, newest first. */
         fun channelVideos(channelId: String) = Feed({ YouTube.rawBrowse(browseId = channelId, params = "EgZ2aWRlb3PyBgQKAjoA") }, { WebApi.browseContinuation(it) })
 
+        /** Your watch history, just what matches [query] (YouTube's "Search watch history"). */
+        fun historySearch(query: String) = Feed(
+            { WebApi.post("browse", org.json.JSONObject().put("browseId", "FEhistory").put("query", query)) },
+            { WebApi.browseContinuation(it) },
+        )
+
         /** A channel's posts (its Posts tab, by the params the channel page gives for it). */
         fun channelPosts(channelId: String, params: String) = channelTab(channelId, params)
 
@@ -255,12 +261,13 @@ class ShortsQueue(seed: VideoItem?) {
         loading = true
         scope.launch {
             try {
-                val first = items.firstOrNull() ?: findSeed()?.also { items = listOf(it) }
+                if (items.isEmpty()) items = findSeeds()
+                val first = items.firstOrNull()
                 if (first == null) {
                     failed = true
                     return@launch
                 }
-                page(first.sequenceParams ?: WebApi.shortSequence(first.id))
+                page(personalSequence(first.id) ?: first.sequenceParams ?: WebApi.shortSequence(first.id))
             } finally {
                 loading = false
             }
@@ -291,10 +298,32 @@ class ShortsQueue(seed: VideoItem?) {
             .onFailure { next = null }
     }
 
-    private suspend fun findSeed(): VideoItem? {
-        Feeds.home.shorts.firstOrNull()?.items?.firstOrNull()?.let { return it }
+    /**
+     * Where the Shorts tab starts: the Shorts YouTube picked for you on your home feed (signed
+     * in, that's your own taste), else a Shorts search's.
+     */
+    private suspend fun findSeeds(): List<VideoItem> {
+        val home = Feeds.home.shorts.flatMap { it.items }.ifEmpty {
+            withContext(Dispatchers.IO) { YouTube.rawBrowse(browseId = "FEwhat_to_watch").mapCatching { YouTubeParser.feed(it) } }
+                .getOrNull()?.shorts?.flatMap { it.items }.orEmpty()
+        }
+        if (home.isNotEmpty()) return home.distinctBy { it.id }.take(6)
         return withContext(Dispatchers.IO) { YouTube.rawSearch(query = "shorts").mapCatching { YouTubeParser.feed(it) } }
-            .getOrNull()?.shorts?.firstOrNull()?.items?.firstOrNull()
+            .getOrNull()?.shorts?.flatMap { it.items }?.take(1).orEmpty()
+    }
+
+    /**
+     * Your own sequence after [videoId], when YouTube gives one (signed in): what the Shorts
+     * player in YouTube's app swipes through, from your watch history and likes.
+     */
+    private suspend fun personalSequence(videoId: String): String? = withContext(Dispatchers.IO) {
+        WebApi.post(
+            "reel/reel_item_watch",
+            org.json.JSONObject()
+                .put("playerRequest", org.json.JSONObject().put("videoId", videoId))
+                .put("params", "CA8%3D")
+                .put("disablePlayerResponse", true),
+        ).mapCatching { org.json.JSONObject(it).optString("sequenceContinuation").takeIf { s -> s.isNotBlank() } }.getOrNull()
     }
 }
 

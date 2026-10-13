@@ -80,8 +80,26 @@ object StreamResolver {
         if (applicationContext == null) applicationContext = context.applicationContext
     }
 
-    suspend fun resolve(videoId: String, live: Boolean = false): Result<VideoStream> =
+    /** Streams resolved ahead of time (the next Shorts), with when: links last a few hours, kept 10 minutes. */
+    private val ready = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, VideoStream>>()
+    private val pending = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** Resolves [videoId] now so playing it later starts at once. */
+    suspend fun prefetch(videoId: String) {
+        if (ready[videoId]?.let { System.currentTimeMillis() - it.first < READY_MS } == true || !pending.add(videoId)) return
         try {
+            resolve(videoId, cached = false).onSuccess { ready[videoId] = System.currentTimeMillis() to it }
+        } finally {
+            pending.remove(videoId)
+        }
+    }
+
+    suspend fun resolve(videoId: String, live: Boolean = false, cached: Boolean = true): Result<VideoStream> {
+        // A prefetched stream, if nothing about the choice (quality, audio) has changed since.
+        if (cached && heightOverride == null && audioTrackOverride == null) {
+            ready.remove(videoId)?.takeIf { System.currentTimeMillis() - it.first < READY_MS }?.let { return Result.success(it.second) }
+        }
+        return try {
             Result.success(direct(videoId, live))
         } catch (error: CancellationException) {
             throw error
@@ -89,6 +107,9 @@ object StreamResolver {
             Timber.tag(TAG).w("direct video failed (%s), trying InnerTubeX", error.message)
             viaExtractor(videoId)
         }
+    }
+
+    private const val READY_MS = 10 * 60_000L
 
     /** Counstar's own path: separate video and audio links from one player response. */
     private suspend fun direct(videoId: String, live: Boolean): VideoStream {

@@ -129,7 +129,7 @@ fun BottomBar(session: Session, bottomInset: Dp) {
             Icon(if (on) Icons.Rounded.Home else Icons.Outlined.Home, contentDescription = null, modifier = Modifier.size(25.dp))
         }
         if (app.counstar.data.Settings.showShorts) {
-            BarItem("Shorts", Nav.tab == Tab.Shorts && !searching, Modifier.weight(1f), onClick = { Nav.goTo(Tab.Shorts) }) { on ->
+            BarItem("Shorts", (Nav.tab == Tab.Shorts && !searching) || Nav.shorts != null, Modifier.weight(1f), onClick = { Nav.goTo(Tab.Shorts) }) { on ->
                 Icon(if (on) Icons.Rounded.PlayCircle else Icons.Outlined.PlayCircle, contentDescription = null, modifier = Modifier.size(25.dp))
             }
         }

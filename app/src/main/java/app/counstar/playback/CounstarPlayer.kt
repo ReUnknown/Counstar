@@ -157,6 +157,12 @@ object CounstarPlayer {
         load(item, startAt = player.currentPosition, isRetry = true)
     }
 
+    /** Gets [item]'s stream ready in the background (the Short after this one), so it starts at once. */
+    fun prefetch(item: VideoItem) {
+        if (item.id == current?.id) return
+        scope.launch(Dispatchers.IO) { StreamResolver.prefetch(item.id) }
+    }
+
     /** Plays this video's [id] audio track, from where it is now. */
     fun pickAudioTrack(id: String) {
         val item = current ?: return

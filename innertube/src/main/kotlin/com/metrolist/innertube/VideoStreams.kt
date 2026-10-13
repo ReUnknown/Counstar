@@ -141,7 +141,10 @@ object VideoStreams {
                 }
                 // AV1 isn't decoded in hardware on many phones. VP9 is on most, H.264 on all.
                 val videoFormats = formats.filter { !it.isAudio && "av01" !in it.mimeType && (allowVp9 || "vp9" !in it.mimeType) }
-                val video = selectBestVideoFormat(videoFormats, requireUrl = false, maxHeight = maxHeight)
+                // "1080p" means the shorter side: a vertical Short at 1080x1920 is 1080p, not
+                // too tall (judged by height alone it fell to 480p and looked pixelated).
+                val fitting = videoFormats.filter { side(it.width, it.height).let { s -> s == 0 || s <= maxHeight } }.ifEmpty { videoFormats }
+                val video = selectBestVideoFormat(fitting, requireUrl = false, maxHeight = Int.MAX_VALUE)
                 val audio = selectBestAudioFormat(formats.filter { it.isAudio }, AudioQuality.HIGH, requireUrl = false)
                 if (video == null || audio == null) {
                     log("${client.clientName}: no formats")
@@ -165,12 +168,12 @@ object VideoStreams {
                     audioUrl = audioUrl,
                     videoLength = video.contentLength ?: -1L,
                     audioLength = audio.contentLength ?: -1L,
-                    height = video.height,
+                    height = side(video.width, video.height).takeIf { it > 0 } ?: video.height,
                     headers = headersFor(client),
                     client = client.clientName,
                     storyboardSpec = storyboard,
                     statsUrl = statsUrl,
-                    heights = videoFormats.mapNotNull { it.height }.filter { it >= 144 }.distinct().sortedDescending(),
+                    heights = videoFormats.map { side(it.width, it.height) }.filter { it >= 144 }.distinct().sortedDescending(),
                     audioTracks = tracks,
                     audioTrack = wanted?.id,
                 )
@@ -183,6 +186,9 @@ object VideoStreams {
         }
         error(lastProblem)
     }
+
+    /** A format's quality, as its shorter side (0 when it doesn't say). */
+    private fun side(width: Int?, height: Int?): Int = listOfNotNull(width, height).filter { it > 0 }.minOrNull() ?: 0
 
     /** Clients whose live playlists play without a PO token, best first. */
     private val liveClients = listOf(YouTubeClient.IOS, YouTubeClient.TVHTML5, YouTubeClient.WEB)

@@ -47,7 +47,12 @@ object Settings {
         maxHeight = p.getInt("max_height", 1080)
         backgroundPlay = p.getBoolean("background_play", true)
         showPosts = p.getBoolean("show_posts", true)
-        showShorts = p.getBoolean("show_shorts", true)
+        // Shorts start off on a new install; someone updating (who's had them) keeps them on.
+        if (!p.contains("show_shorts")) {
+            val updating = p.all.isNotEmpty() || context.applicationContext.getSharedPreferences("updates", Context.MODE_PRIVATE).contains("last_check")
+            p.edit().putBoolean("show_shorts", updating).apply()
+        }
+        showShorts = p.getBoolean("show_shorts", false)
         shortsAutoScroll = p.getBoolean("shorts_auto_scroll", false)
         searchHistory = p.getString("search_history", null)?.split('\n')?.filter { it.isNotBlank() }.orEmpty()
         theme = runCatching { Theme.valueOf(p.getString("theme", null) ?: "System") }.getOrDefault(Theme.System)

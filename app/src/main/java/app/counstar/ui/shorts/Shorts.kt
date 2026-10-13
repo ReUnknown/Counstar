@@ -1,6 +1,23 @@
 package app.counstar.ui.shorts
 
 import android.content.Intent
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.text.TextStyle
+import app.counstar.ui.components.BlurredImage
+import app.counstar.ui.components.SaveToPlaylistSheet
+import app.counstar.ui.watch.Ambient
+import app.counstar.ui.watch.formatTime
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -148,7 +165,12 @@ fun ShortsPlayer(queue: ShortsQueue, onClose: (() -> Unit)?, active: Boolean = t
             if (CounstarPlayer.current?.id == current.id) CounstarPlayer.player.play() else CounstarPlayer.play(current)
         }
         LaunchedEffect(Settings.shortsAutoScroll) { if (active) CounstarPlayer.changeLoop(!Settings.shortsAutoScroll) }
-        LaunchedEffect(pager.settledPage, items.size) { if (pager.settledPage >= items.size - 3) queue.loadMore() }
+        LaunchedEffect(pager.settledPage, items.size) {
+            if (pager.settledPage >= items.size - 3) queue.loadMore()
+            // The next two get their streams ready now, so swiping to them plays at once.
+            items.getOrNull(pager.settledPage + 1)?.let(CounstarPlayer::prefetch)
+            items.getOrNull(pager.settledPage + 2)?.let(CounstarPlayer::prefetch)
+        }
         // Auto scroll: on to the next Short when one ends. Leaving Shorts stops them.
         DisposableEffect(queue) {
             val listener = object : Player.Listener {
@@ -175,6 +197,16 @@ fun ShortsPlayer(queue: ShortsQueue, onClose: (() -> Unit)?, active: Boolean = t
 
 private class Heart(val id: Long, val at: Offset, val tilt: Float)
 
+/** Text over a video: a soft shadow keeps it readable on anything. */
+private val shadowed = TextStyle(shadow = Shadow(Color.Black.copy(alpha = 0.6f), Offset(0f, 1f), 8f))
+
+/** Keeps only the part of what's drawn under [brush]'s opaque stretch. */
+private fun Modifier.masked(brush: Brush) = graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        drawRect(brush, blendMode = BlendMode.DstIn)
+    }
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?, bottomInset: Dp) {
@@ -188,8 +220,11 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
     var menuOpen by remember(item.id) { mutableStateOf(false) }
     var captionsOpen by remember(item.id) { mutableStateOf(false) }
     var descriptionOpen by remember(item.id) { mutableStateOf(false) }
+    var saveOpen by remember(item.id) { mutableStateOf(false) }
     var fast by remember(item.id) { mutableStateOf(false) }
     var hearts by remember(item.id) { mutableStateOf<List<Heart>>(emptyList()) }
+    /** The play / pause flash after a tap: when, and whether it now plays. */
+    var flash by remember(item.id) { mutableStateOf<Pair<Long, Boolean>?>(null) }
     BackHandler(commentsOpen) { commentsOpen = false }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -215,9 +250,45 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
 
     MaterialTheme(colorScheme = rememberArtColorScheme(details?.channelAvatar ?: item.channelAvatar ?: item.thumbnail)) {
         val colors = MaterialTheme.colorScheme
+        val state = rememberPlaybackState(CounstarPlayer.player)
+        val mine = playing && CounstarPlayer.current?.id == item.id
+        val frame = if (mine) Ambient.frame else null
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            // The picture, and every gesture on it: tap to pause, double tap to like (a heart
-            // pops where you tapped), hold either side for 2x, hold the middle for the menu.
+            // Acrylic bars: the Short's own picture, blurred, fills what the video doesn't
+            // (it's never cropped to fit).
+            if (frame != null) {
+                Image(frame, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(48.dp, BlurredEdgeTreatment.Rectangle))
+            } else {
+                BlurredImage(item.thumbnail, Modifier.fillMaxSize(), radius = 64.dp)
+            }
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f)))
+            if (mine) {
+                VideoSurface(Modifier.fillMaxSize(), contentScale = ContentScale.Fit, sampleAmbient = true)
+            } else {
+                AsyncImage(item.thumbnail, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+            }
+            // Fade blur, top and bottom: the picture there frosts over, so what's written on it reads.
+            if (frame != null) {
+                Image(
+                    frame, null, contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize().blur(18.dp).masked(Brush.verticalGradient(0f to Color.Black, 0.12f to Color.Black, 0.2f to Color.Transparent)),
+                )
+                Image(
+                    frame, null, contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize().blur(18.dp).masked(Brush.verticalGradient(0.6f to Color.Transparent, 0.74f to Color.Black, 1f to Color.Black)),
+                )
+            }
+            Box(Modifier.fillMaxWidth().height(150.dp).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.45f), Color.Transparent))))
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(300.dp + bottomInset)
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.55f)))),
+            )
+
+            // Every gesture: tap to pause, double tap to like (a heart pops where you tapped),
+            // hold either side for 2x, hold the middle for the menu.
             Box(
                 Modifier
                     .fillMaxSize()
@@ -245,39 +316,31 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
                                 hearts = hearts + Heart(System.nanoTime(), at, Random.nextInt(-22, 22).toFloat())
                                 setLiked(true)
                             },
-                            onTap = { with(CounstarPlayer.player) { if (isPlaying) pause() else play() } },
+                            onTap = {
+                                val player = CounstarPlayer.player
+                                val play = !player.isPlaying
+                                if (play) player.play() else player.pause()
+                                flash = System.nanoTime() to play
+                            },
                         )
                     },
-            ) {
-                if (playing && CounstarPlayer.current?.id == item.id) {
-                    VideoSurface(Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                } else {
-                    AsyncImage(item.thumbnail, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                }
-            }
-            val state = rememberPlaybackState(CounstarPlayer.player)
-            val mine = playing && CounstarPlayer.current?.id == item.id
+            )
+
             if (mine) {
                 if (CounstarPlayer.loading || (state.buffering && !state.playing)) {
                     LoadingIndicator(Modifier.align(Alignment.Center).size(64.dp), color = Color.White)
+                } else if (!state.playing && CounstarPlayer.error == null) {
+                    // Paused: a quiet play sign stays until you tap again.
+                    Icon(Icons.Rounded.PlayArrow, contentDescription = null, tint = Color.White.copy(alpha = 0.55f), modifier = Modifier.align(Alignment.Center).size(84.dp))
                 }
                 CounstarPlayer.error?.let { Text(it, color = Color.White, modifier = Modifier.align(Alignment.Center).padding(32.dp)) }
-                Box(Modifier.fillMaxSize().padding(bottom = bottomInset + 150.dp)) { Captions(state.position, fullscreen = true, lifted = false) }
+                Box(Modifier.fillMaxSize().padding(bottom = bottomInset + 170.dp)) { Captions(state.position, fullscreen = true, lifted = false) }
             }
-
-            // Shades top and bottom, so everything on top reads over any video.
-            Box(Modifier.fillMaxWidth().height(140.dp).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.5f), Color.Transparent))))
-            Box(
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .height(320.dp + bottomInset)
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.72f)))),
-            )
+            flash?.let { f -> key(f.first) { PlayFlash(f.second, Modifier.align(Alignment.Center)) } }
 
             Row(Modifier.statusBarsPadding().padding(horizontal = 4.dp, vertical = 4.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 if (onClose != null) IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = Color.White) }
-                Text("Shorts", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(start = if (onClose == null) 16.dp else 0.dp))
+                Text("Shorts", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, style = shadowed, modifier = Modifier.padding(start = if (onClose == null) 16.dp else 0.dp))
                 Spacer(Modifier.weight(1f))
                 IconButton(onClick = { menuOpen = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = "More", tint = Color.White) }
             }
@@ -293,11 +356,11 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
                 )
             }
 
-            // Like (a heart), comments, share.
+            // Like (a heart), comments, save, share.
             Column(
-                Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = bottomInset + 110.dp),
+                Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = bottomInset + 128.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(18.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 val pop by animateFloatAsState(if (liked) 1f else 0f, spring(dampingRatio = 0.4f, stiffness = 500f), label = "pop")
                 Rail(
@@ -310,6 +373,9 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
                     setLiked(!liked)
                 }
                 Rail(Icons.Outlined.ChatBubbleOutline, details?.commentCount ?: "Comments") { if (comments != null) commentsOpen = true }
+                Rail(Icons.Outlined.BookmarkBorder, "Save") {
+                    if (YouTube.cookie.isNullOrBlank()) Toast.makeText(context, "Sign in to save", Toast.LENGTH_SHORT).show() else saveOpen = true
+                }
                 Rail(Icons.Rounded.Share, "Share") {
                     val send = Intent(Intent.ACTION_SEND).apply {
                         type = "text/plain"
@@ -319,9 +385,9 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
                 }
             }
 
-            // Who and what, at the bottom; then how far through it is.
+            // Who and what, above the bottom bar; then the scrub bar.
             Column(
-                Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(bottom = bottomInset + 14.dp),
+                Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(bottom = bottomInset + 10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Row(Modifier.padding(start = 16.dp, end = 84.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -337,6 +403,7 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
                             color = Color.White,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
+                            style = shadowed,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -350,14 +417,12 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
                     color = Color.White,
                     fontSize = 15.sp,
                     lineHeight = 20.sp,
+                    style = shadowed,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(start = 16.dp, end = 84.dp).clip(RoundedCornerShape(8.dp)).clickable { descriptionOpen = true },
                 )
-                val progress = if (mine && state.duration > 0) state.position.toFloat() / state.duration else 0f
-                Box(Modifier.padding(horizontal = 12.dp).fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.25f))) {
-                    Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f)).background(colors.primary))
-                }
+                Scrubber(if (mine) state.position else 0L, if (mine) state.duration else 0L, colors.primary, enabled = mine)
             }
 
             hearts.forEach { h -> key(h.id) { FloatingHeart(h) { hearts = hearts - h } } }
@@ -392,6 +457,7 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
             )
         }
         if (captionsOpen) CaptionsSheet(onDismiss = { captionsOpen = false })
+        if (saveOpen) SaveToPlaylistSheet(item.id, onDismiss = { saveOpen = false })
         if (descriptionOpen) {
             ModalBottomSheet(onDismissRequest = { descriptionOpen = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = colors.background) {
                 Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -413,6 +479,81 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
                     }
                     Text(details?.description ?: "No description.", fontSize = 14.sp, lineHeight = 20.sp, color = colors.onBackground)
                 }
+            }
+        }
+    }
+}
+
+/** After a tap: play or pause, big in the middle, popping in and fading away. */
+@Composable
+private fun PlayFlash(playing: Boolean, modifier: Modifier) {
+    val scale = remember { Animatable(0.6f) }
+    val alpha = remember { Animatable(1f) }
+    LaunchedEffect(Unit) {
+        launch { scale.animateTo(1.1f, spring(dampingRatio = 0.5f, stiffness = 500f)) }
+        alpha.animateTo(0f, tween(550, delayMillis = 250))
+    }
+    Box(
+        modifier
+            .size(88.dp)
+            .graphicsLayer {
+                scaleX = scale.value
+                scaleY = scale.value
+                this.alpha = alpha.value
+            }
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.45f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(if (playing) Icons.Rounded.PlayArrow else Icons.Rounded.Pause, contentDescription = null, tint = Color.White, modifier = Modifier.size(52.dp))
+    }
+}
+
+/**
+ * The Short's progress, and a scrub bar: drag (or tap) along it to move through the Short. It
+ * thickens under your finger and shows the time you'd jump to.
+ */
+@Composable
+private fun Scrubber(position: Long, duration: Long, accent: Color, enabled: Boolean) {
+    var dragging by remember { mutableStateOf<Float?>(null) }
+    val shown = dragging ?: if (duration > 0) position.toFloat() / duration else 0f
+    val thick by animateDpAsState(if (dragging != null) 8.dp else 3.dp, label = "thick")
+    Column(Modifier.fillMaxWidth()) {
+        if (dragging != null && duration > 0) {
+            Text(
+                "${formatTime((shown * duration).toLong())} / ${formatTime(duration)}",
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.ExtraBold,
+                style = shadowed,
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 10.dp),
+            )
+        }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(26.dp)
+                .padding(horizontal = 12.dp)
+                .pointerInput(enabled, duration) {
+                    if (!enabled || duration <= 0) return@pointerInput
+                    detectHorizontalDragGestures(
+                        onDragStart = { at -> dragging = (at.x / size.width).coerceIn(0f, 1f) },
+                        onHorizontalDrag = { change, _ -> dragging = (change.position.x / size.width).coerceIn(0f, 1f) },
+                        onDragEnd = {
+                            dragging?.let { CounstarPlayer.player.seekTo((it * duration).toLong()) }
+                            dragging = null
+                        },
+                        onDragCancel = { dragging = null },
+                    )
+                }
+                .pointerInput(enabled, duration) {
+                    if (!enabled || duration <= 0) return@pointerInput
+                    detectTapGestures { at -> CounstarPlayer.player.seekTo(((at.x / size.width).coerceIn(0f, 1f) * duration).toLong()) }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(Modifier.fillMaxWidth().height(thick).clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.28f))) {
+                Box(Modifier.fillMaxHeight().fillMaxWidth(shown.coerceIn(0f, 1f)).background(accent))
             }
         }
     }

@@ -229,6 +229,8 @@ private fun Shell(session: Session) {
             Nav.channels.lastOrNull()?.let { id -> key(id) { ChannelScreen(id, bottomPadding = bottom) } }
             Nav.playlist?.let { PlaylistScreen(it, bottomPadding = bottom) }
             Nav.post?.let { p -> key(p.id) { app.counstar.ui.posts.PostScreen(p, bottomPadding = bottom) } }
+            // Shorts opened from a card or link: under the bottom bar, like the Shorts tab.
+            Nav.shorts?.let { q -> key(q) { app.counstar.ui.shorts.ShortsPlayer(q, onClose = { Nav.closeShort() }, active = !Nav.watchOpen, bottomInset = dock) } }
         }
 
         // Top: one even pane of frosted glass from the very top of the screen down to the
@@ -250,7 +252,7 @@ private fun Shell(session: Session) {
                 // The bar slides up under the status bar: keep its content out of the clock.
                 Box(Modifier.fillMaxWidth().height(statusBar).hazeEffect(haze, glass))
             }
-        } else if (overlay && Nav.playlist == null && Nav.channels.isEmpty() && Nav.post == null) {
+        } else if (overlay && Nav.playlist == null && Nav.channels.isEmpty() && Nav.post == null && Nav.shorts == null) {
             Box(Modifier.fillMaxWidth().height(statusBar).background(MaterialTheme.colorScheme.background))
         }
 
@@ -279,7 +281,6 @@ private fun Shell(session: Session) {
             WatchScreen(fullscreen = fullscreen, onToggleFullscreen = toggleFullscreen)
         }
 
-        Nav.shorts?.let { q -> key(q) { app.counstar.ui.shorts.ShortsPlayer(q, onClose = { Nav.closeShort() }) } }
 
         if (Nav.settingsOpen) SettingsSheet(onDismiss = { Nav.settingsOpen = false })
         app.counstar.ui.channel.ChannelPeek.id?.let { id ->
