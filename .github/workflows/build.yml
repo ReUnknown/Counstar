@@ -6,8 +6,8 @@
 #     KEYSTORE_BASE64      the .jks file, base64-encoded
 #     KEYSTORE_PROPERTIES  keystore/keystore.properties, as is
 #   Release notes come from .github/release-notes/<tag>.md when that file exists.
-#   Without those secrets, a tag builds the release APK unsigned and uploads it (with
-#   apksigner and zipalign) as the "unsigned-release" artifact, to be signed elsewhere.
+#   Without those secrets, the release APK is built unsigned and put (with apksigner and
+#   zipalign) on a draft release, to be signed elsewhere, swapped in, and published from there.
 name: Build
 
 on:
@@ -82,12 +82,17 @@ jobs:
           cp "$tools/lib/apksigner.jar" "$tools/zipalign" unsigned/
           cp -r "$tools/lib64/." unsigned/lib64/ 2>/dev/null || true
 
-      - uses: actions/upload-artifact@v4
+      - name: Put them on a draft release
         if: env.RELEASE == 'true' && env.HAS_KEY != 'true'
+        uses: softprops/action-gh-release@v2
         with:
-          name: unsigned-release
-          path: unsigned/
-          retention-days: 3
+          name: Counstar ${{ env.VERSION }}
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
+          draft: true
+          files: |
+            unsigned/*
+            unsigned/lib64/*
 
       - name: Check the signature
         if: env.RELEASE == 'true' && env.HAS_KEY == 'true'
