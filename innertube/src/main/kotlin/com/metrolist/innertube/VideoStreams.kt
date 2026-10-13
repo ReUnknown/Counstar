@@ -55,6 +55,8 @@ object VideoStreams {
         cipher: ExtractionCipherService,
         poToken: suspend (videoId: String, visitorData: String) -> PoTokenResult?,
         log: (String) -> Unit = {},
+        /** Known to be live (from the card): go straight to the live stream. */
+        live: Boolean = false,
     ): Stream {
         val innerTube = YouTube.extractionTransport().innerTube
         // The embed page's player script is much smaller than the watch page's, so deciphering
@@ -67,6 +69,7 @@ object VideoStreams {
             configParser.fetchConfig(videoId, useLoginCookies = signedIn)
         }
         val visitorData = config.visitorData ?: innerTube.visitorData.orEmpty()
+        if (live) liveStream(videoId, config, visitorData, log)?.let { return it }
         var lastProblem = "No playable stream"
         for (client in clients) {
             try {
@@ -100,6 +103,12 @@ object VideoStreams {
                         ?.optString("baseUrl")
                         ?.takeIf { it.isNotBlank() }
                 }.getOrNull()
+                // A live stream has no files to pick, only an HLS playlist.
+                if (JSONObject(text).optJSONObject("videoDetails")?.optBoolean("isLive") == true) {
+                    liveStream(videoId, config, visitorData, log)?.let { return it }
+                    lastProblem = "Couldn't load this live stream"
+                    continue
+                }
                 val response = json.decodeFromString<PlayerResponse>(text)
                 if (response.playabilityStatus.status != "OK") {
                     lastProblem = response.playabilityStatus.reason ?: response.playabilityStatus.status
@@ -148,6 +157,53 @@ object VideoStreams {
             }
         }
         error(lastProblem)
+    }
+
+    /** Clients whose live playlists play without a PO token, best first. */
+    private val liveClients = listOf(YouTubeClient.IOS, YouTubeClient.TVHTML5, YouTubeClient.WEB)
+
+    /**
+     * A live stream: its HLS playlist (picture and sound together, which the player follows as
+     * the stream goes on), from the first client that gives one.
+     */
+    private suspend fun liveStream(videoId: String, config: PlayerConfig, visitorData: String, log: (String) -> Unit): Stream? {
+        val innerTube = YouTube.extractionTransport().innerTube
+        for (client in liveClients) {
+            try {
+                val text = innerTube.player(
+                    client = client,
+                    videoId = videoId,
+                    playlistId = null,
+                    signatureTimestamp = config.signatureTimestamp,
+                    poToken = null,
+                    requestVisitorData = visitorData.ifBlank { null },
+                    encryptedHostFlags = null,
+                ).bodyAsText()
+                val root = JSONObject(text)
+                val hls = root.optJSONObject("streamingData")?.optString("hlsManifestUrl")?.takeIf { it.isNotBlank() }
+                if (hls == null) {
+                    log("${client.clientName}: no live playlist (${root.optJSONObject("playabilityStatus")?.optString("status")})")
+                    continue
+                }
+                log("${client.clientName}: live HLS")
+                return Stream(
+                    videoUrl = hls,
+                    audioUrl = hls,
+                    videoLength = -1L,
+                    audioLength = -1L,
+                    height = null,
+                    headers = headersFor(client),
+                    client = client.clientName,
+                    storyboardSpec = null,
+                    statsUrl = root.optJSONObject("playbackTracking")?.optJSONObject("videostatsPlaybackUrl")?.optString("baseUrl")?.takeIf { it.isNotBlank() },
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("${client.clientName} live failed: ${e::class.simpleName}")
+            }
+        }
+        return null
     }
 
     private fun headersFor(client: YouTubeClient): Map<String, String> = buildMap {

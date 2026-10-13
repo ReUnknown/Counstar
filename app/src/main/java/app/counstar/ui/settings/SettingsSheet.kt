@@ -18,6 +18,7 @@ import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -73,6 +74,14 @@ fun SettingsSheet(onDismiss: () -> Unit) {
                     Text("The video's colors glow softly around the player", fontSize = 13.sp, lineHeight = 17.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
                 }
                 Switch(checked = Settings.ambientGlow, onCheckedChange = { Settings.saveAmbientGlow(it) })
+            }
+            Tile(RoundedCornerShape(6.dp), onClick = { Settings.saveShowPosts(!Settings.showPosts) }) {
+                Icon(Icons.Rounded.Forum, contentDescription = null, tint = colors.primary)
+                Column(Modifier.weight(1f)) {
+                    Text("Posts", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Creators' posts and polls, in your feeds and on channels", fontSize = 13.sp, lineHeight = 17.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+                }
+                Switch(checked = Settings.showPosts, onCheckedChange = { Settings.saveShowPosts(it) })
             }
             Tile(RoundedCornerShape(6.dp), onClick = { Settings.saveBackgroundPlay(!Settings.backgroundPlay) }) {
                 Icon(Icons.Rounded.Headphones, contentDescription = null, tint = colors.primary)

@@ -72,7 +72,6 @@ import app.counstar.ui.components.VideoRow
 import app.counstar.ui.components.pressable
 import app.counstar.ui.components.rememberArtColorScheme
 import app.counstar.ui.components.rememberHaptics
-import app.counstar.ui.watch.CommentsCard
 import app.counstar.ui.watch.CommentsPanel
 import app.counstar.ui.watch.CommentsState
 import app.counstar.ui.you.Page
@@ -338,8 +337,8 @@ private fun likes(count: String?, was: Boolean, now: Boolean): String? {
 }
 
 /**
- * A post on its own, in its creator's colors: the whole post, then its comments (tap to open
- * them over the page, like a video's).
+ * A post on its own, all in its creator's colors (remembered for the page, like a channel's):
+ * the whole post at the top, then its comments right below with the box to add yours.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -348,7 +347,6 @@ fun PostScreen(post: Post, bottomPadding: Dp) {
     var detail by remember(post.id) { mutableStateOf<Post?>(null) }
     var token by remember(post.id) { mutableStateOf<String?>(null) }
     var loaded by remember(post.id) { mutableStateOf(post.detailParams == null) }
-    var commentsOpen by remember(post.id) { mutableStateOf(false) }
     LaunchedEffect(post.id) {
         val params = post.detailParams ?: return@LaunchedEffect
         withContext(Dispatchers.IO) { WebApi.browse("FEpost_detail", params).mapCatching(YouTubeParser::postDetail) }
@@ -361,34 +359,31 @@ fun PostScreen(post: Post, bottomPadding: Dp) {
     val shown = detail ?: post
     val comments = remember(token) { token?.let { CommentsState(it, emptyList(), shown.comments, browse = true) } }
     MaterialTheme(colorScheme = rememberArtColorScheme(post.avatar)) {
-        Box(Modifier.fillMaxSize()) {
-            Page("Post", onBack = { Nav.post = null }) {
+        val colors = MaterialTheme.colorScheme
+        Page("Post", onBack = { Nav.post = null }) {
+            if (comments != null) {
+                CommentsPanel(
+                    comments,
+                    onClose = null,
+                    modifier = Modifier.padding(bottom = bottomPadding),
+                    header = { item(key = "post") { PostCard(shown, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp), onOpen = null, onComments = {}) } },
+                    background = colors.background,
+                )
+            } else {
                 LazyColumn(
                     Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(top = 4.dp, bottom = bottomPadding + 16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    item(key = "post") { PostCard(shown, onOpen = null, onComments = { if (comments != null) commentsOpen = true }) }
+                    item(key = "post") { PostCard(shown, onOpen = null, onComments = {}) }
                     item(key = "comments") {
-                        when {
-                            comments != null -> CommentsCard(comments) { commentsOpen = true }
-                            !loaded -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { LoadingIndicator(Modifier.size(44.dp)) }
-                            else -> Text(
-                                "Comments are off for this post.",
-                                fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 24.dp),
-                            )
+                        if (!loaded) {
+                            Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { LoadingIndicator(Modifier.size(44.dp)) }
+                        } else {
+                            Text("Comments are off for this post.", fontSize = 14.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp))
                         }
                     }
                 }
-            }
-            if (commentsOpen && comments != null) {
-                CommentsPanel(
-                    comments,
-                    onClose = { commentsOpen = false },
-                    modifier = Modifier.padding(bottom = bottomPadding).statusBarsPadding(),
-                )
             }
         }
     }

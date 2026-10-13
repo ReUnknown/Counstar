@@ -81,8 +81,9 @@ import app.counstar.ui.you.PlaylistRow
 private val tabs = listOf("Home", "Videos", "Live", "Posts", "Playlists")
 
 /**
- * A channel's page, in the channel's own colors: its banner big near the top (the TV-size
- * picture, on a rounded card clear of the camera); the avatar ringed in the channel's color;
+ * A channel's page, in the channel's own colors: its banner big across the top (the whole
+ * TV-size picture, fading into the page; its middle, where the art is, sits well below the
+ * camera); the avatar ringed in the channel's color;
  * name, handle, subscribers; Subscribe; then Home, Videos, Live, Posts and Playlists. Videos and
  * Live sort by Latest, Popular or Oldest.
  */
@@ -99,7 +100,7 @@ fun ChannelScreen(channelId: String, bottomPadding: Dp) {
     val shownTabs = tabs.filter { t ->
         val listed = when (t) {
             // Only once the page says how to load it.
-            "Posts" -> info != null && ("Posts" in info.tabParams || "Community" in info.tabParams)
+            "Posts" -> app.counstar.data.Settings.showPosts && info != null && ("Posts" in info.tabParams || "Community" in info.tabParams)
             else -> info == null || info.tabs.isEmpty() || t in info.tabs
         }
         val empty = when (t) {
@@ -149,7 +150,7 @@ fun ChannelScreen(channelId: String, bottomPadding: Dp) {
             if (aboutOpen) AboutSheet(page, onDismiss = { aboutOpen = false })
             // Back and share, on glass over the banner; once the header scrolls away, a solid
             // bar with the channel's name.
-            val scrolled by remember { derivedStateOf { list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > 260 } }
+            val scrolled by remember { derivedStateOf { list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > 520 } }
             val bar by androidx.compose.animation.core.animateFloatAsState(if (scrolled) 1f else 0f, label = "bar")
             Box(Modifier.fillMaxWidth().graphicsLayer { alpha = bar }.background(colors.background).statusBarsPadding().height(60.dp))
             Row(Modifier.statusBarsPadding().padding(horizontal = 4.dp, vertical = 4.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -176,18 +177,19 @@ fun ChannelScreen(channelId: String, bottomPadding: Dp) {
     }
 }
 
-/** Back and share: tonal circles in the channel's colors, above the banner. */
+/** Back and share, on glass over the banner. */
 @Composable
 private fun GlassButton(onClick: () -> Unit, content: @Composable () -> Unit) {
     Box(
         Modifier
             .size(44.dp)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .background(Color.Black.copy(alpha = 0.32f))
+            .border(1.dp, Color.White.copy(alpha = 0.16f), CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onSurface) { content() }
+        androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides Color.White) { content() }
     }
 }
 
@@ -196,10 +198,10 @@ private fun GlassButton(onClick: () -> Unit, content: @Composable () -> Unit) {
 private fun Header(channelId: String, info: ChannelInfo?, failed: Boolean, onAbout: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth()) {
-        // Clear of the camera and the back / share row, then the banner big, on a rounded card:
-        // the TV-size picture, cropped to 2:1, so more of it shows than YouTube's thin strip.
-        Spacer(Modifier.statusBarsPadding().height(60.dp))
-        info?.banner?.let { ChannelBanner(it, Modifier.padding(start = 12.dp, end = 12.dp, bottom = 16.dp), aspect = 2f, shape = RoundedCornerShape(24.dp)) }
+        // The whole TV-size banner (16:9), edge to edge under the status bar, fading into the
+        // page: far more of it than YouTube's thin strip, and its middle clear of the camera.
+        val banner = info?.banner
+        if (banner != null) ChannelBanner(banner, aspect = 16f / 9f) else Spacer(Modifier.statusBarsPadding().height(64.dp))
         Column(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),

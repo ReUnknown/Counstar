@@ -169,6 +169,7 @@ private fun Shell(session: Session) {
             when (val target = Links.resolve(link)) {
                 is Links.Target.Video -> Nav.watch(Links.video(target.id), startAtMs = target.startMs)
                 is Links.Target.Channel -> Nav.openChannel(target.id)
+                is Links.Target.Short -> Nav.openShort(Links.video(target.id))
                 null -> Toast.makeText(context, "Counstar can't open that link", Toast.LENGTH_SHORT).show()
             }
         }
@@ -181,7 +182,7 @@ private fun Shell(session: Session) {
     val statusBar = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val systemNav = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val bottomBar = BottomBarHeight + systemNav
-    val showMini = CounstarPlayer.current != null && !Nav.watchOpen
+    val showMini = CounstarPlayer.current != null && !Nav.watchOpen && Nav.short == null
     val dock = bottomBar + if (showMini) MiniPlayerHeight else 0.dp
     val bottom: Dp = dock + 16.dp
     val overlay = Nav.overlay
@@ -273,6 +274,8 @@ private fun Shell(session: Session) {
         ) {
             WatchScreen(fullscreen = fullscreen, onToggleFullscreen = toggleFullscreen)
         }
+
+        Nav.short?.let { s -> key(s.id) { app.counstar.ui.shorts.ShortsScreen(s) } }
 
         if (Nav.settingsOpen) SettingsSheet(onDismiss = { Nav.settingsOpen = false })
         app.counstar.ui.channel.ChannelPeek.id?.let { id ->

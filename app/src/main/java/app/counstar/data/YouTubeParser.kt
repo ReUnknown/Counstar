@@ -51,6 +51,9 @@ data class FeedPage(
  */
 data class ChannelItem(val id: String, val title: String, val avatar: String?, val handle: String? = null, val subscribers: String? = null, val after: Int = 0)
 
+/** A search suggestion; YouTube attaches the channel when the suggestion is one. */
+data class Suggestion(val text: String, val channel: ChannelItem? = null)
+
 /** A creator's post: text, and maybe pictures, a poll or a video. [after] as in [ChannelItem]. */
 data class Post(
     val id: String,
@@ -339,6 +342,31 @@ object YouTubeParser {
             }
         }
         return posts.values.toList()
+    }
+
+    /**
+     * Suggestions for what's typed, from YouTube's JSONP:
+     * window.google.ac.h(["mrbeas",[["mrbeast",0,[...],{"zav":"UC...","zao":"MrBeast","zaf":"@MrBeast","zai":"https://..."}], ...]]).
+     */
+    fun suggestions(jsonp: String): List<Suggestion> {
+        val start = jsonp.indexOf('(')
+        val end = jsonp.lastIndexOf(')')
+        val root = JSONArray(if (start >= 0 && end > start) jsonp.substring(start + 1, end) else jsonp)
+        val list = root.optJSONArray(1) ?: return emptyList()
+        return (0 until list.length()).mapNotNull { i ->
+            val entry = list.optJSONArray(i)
+            val text = entry?.optString(0)?.takeIf { it.isNotBlank() } ?: list.optString(i).takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val meta = (0 until (entry?.length() ?: 0)).firstNotNullOfOrNull { entry?.optJSONObject(it) }
+            val channel = meta?.optString("zav")?.takeIf { it.startsWith("UC") }?.let { id ->
+                ChannelItem(
+                    id = id,
+                    title = meta.optString("zao").ifBlank { text },
+                    avatar = meta.optString("zai").takeIf { it.isNotBlank() }?.let(::fixUrl),
+                    handle = meta.optString("zaf").takeIf { it.isNotBlank() },
+                )
+            }
+            Suggestion(text, channel)
+        }
     }
 
     /** A post opened on its own: the post, and the token for its comments. */

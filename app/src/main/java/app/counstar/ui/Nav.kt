@@ -24,6 +24,8 @@ object Nav {
     /** Every subscription, as a list. */
     var allSubscriptionsOpen by mutableStateOf(false)
     var watchOpen by mutableStateOf(false)
+    /** A Short, opened from a link (Shorts aren't in feeds). */
+    var short by mutableStateOf<VideoItem?>(null)
     /** A creator's post, opened with its comments. */
     var post by mutableStateOf<Post?>(null)
 
@@ -55,8 +57,28 @@ object Nav {
     }
 
     fun watch(item: VideoItem, startAtMs: Long = 0L) {
+        if (short != null) {
+            short = null
+            CounstarPlayer.changeLoop(false)
+        }
         CounstarPlayer.play(item, startAtMs)
         watchOpen = true
+    }
+
+    /** Plays a Short full screen, looping, over everything. */
+    fun openShort(item: VideoItem) {
+        watchOpen = false
+        short = item
+        CounstarPlayer.changeLoop(true)
+        CounstarPlayer.play(item)
+    }
+
+    /** Leaves the Short; it stops (it never goes to the mini player). */
+    fun closeShort() {
+        if (short == null) return
+        short = null
+        CounstarPlayer.changeLoop(false)
+        CounstarPlayer.stop()
     }
 
     fun openPost(p: Post) {
@@ -68,5 +90,6 @@ object Nav {
         goTo(Tab.Home)
         settingsOpen = false
         watchOpen = false
+        short = null
     }
 }

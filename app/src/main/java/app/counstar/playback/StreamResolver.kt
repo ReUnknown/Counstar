@@ -76,9 +76,9 @@ object StreamResolver {
         if (applicationContext == null) applicationContext = context.applicationContext
     }
 
-    suspend fun resolve(videoId: String): Result<VideoStream> =
+    suspend fun resolve(videoId: String, live: Boolean = false): Result<VideoStream> =
         try {
-            Result.success(direct(videoId))
+            Result.success(direct(videoId, live))
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -87,7 +87,7 @@ object StreamResolver {
         }
 
     /** Counstar's own path: separate video and audio links from one player response. */
-    private suspend fun direct(videoId: String): VideoStream {
+    private suspend fun direct(videoId: String, live: Boolean): VideoStream {
         val bundle = bundle()
         val stream = VideoStreams.resolve(
             videoId = videoId,
@@ -98,6 +98,7 @@ object StreamResolver {
             cipher = bundle.cipherService,
             poToken = { id, visitorData -> tokenProvider.getPoToken(id, visitorData, YouTube.cookie) },
             log = { Timber.tag(TAG).d(it) },
+            live = live,
         )
         return VideoStream(
             videoId = videoId,

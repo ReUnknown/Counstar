@@ -137,6 +137,10 @@ object WebApi {
         response.bodyAsText()
     }
 
+    /** What YouTube suggests as you type [query] (its JSONP: suggestions, some with a channel). */
+    suspend fun suggestions(query: String): Result<String> =
+        fetch("https://suggestqueries-clients6.youtube.com/complete/search?client=youtube&ds=yt&hl=en&gl=us&q=" + java.net.URLEncoder.encode(query, "UTF-8"))
+
     /** Fetches a plain URL (caption text). */
     suspend fun fetch(url: String): Result<String> = runCatching {
         val response = YouTube.extractionTransport().httpClient.get(url) { header("User-Agent", client.userAgent) }

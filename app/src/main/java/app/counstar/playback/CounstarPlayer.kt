@@ -229,7 +229,7 @@ object CounstarPlayer {
         loading = true
         player.stop()
         loadJob = scope.launch {
-            val stream = withContext(Dispatchers.IO) { StreamResolver.resolve(item.id) }
+            val stream = withContext(Dispatchers.IO) { StreamResolver.resolve(item.id, live = item.isLive) }
             stream
                 .onSuccess {
                     storyboard = Storyboard.parse(it.storyboardSpec)

@@ -18,6 +18,7 @@ object Links {
     sealed interface Target {
         data class Video(val id: String, val startMs: Long) : Target
         data class Channel(val id: String) : Target
+        data class Short(val id: String) : Target
     }
 
     private val videoId = Regex("[A-Za-z0-9_-]{11}")
@@ -42,6 +43,7 @@ object Links {
         }
         if (id != null) {
             if (!videoId.matches(id)) return null
+            if (path.firstOrNull() == "shorts") return Target.Short(id)
             return Target.Video(id, startMs(uri.getQueryParameter("t") ?: uri.getQueryParameter("start")))
         }
         if (path.firstOrNull() == "channel") path.getOrNull(1)?.let { return Target.Channel(it) }

@@ -102,7 +102,7 @@ fun SubscriptionsScreen(contentPadding: PaddingValues, refreshOffset: Dp) {
     // All: videos with the channels' posts among them; Posts: just those.
     val shown = when (filter) {
         Filter.All -> mix(feed.items, feed.posts)
-        Filter.Posts -> feed.posts.map { FeedEntry.PostEntry(it) }
+        Filter.Posts -> feed.posts.takeIf { app.counstar.data.Settings.showPosts }.orEmpty().map { FeedEntry.PostEntry(it) }
         else -> feed.items.filter(filter::keeps).map { FeedEntry.Video(it) }
     }
 
@@ -148,7 +148,7 @@ fun SubscriptionsScreen(contentPadding: PaddingValues, refreshOffset: Dp) {
             }
             item(key = "filters") {
                 LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(Filter.entries.filter { it != Filter.Posts || feed.posts.isNotEmpty() }, key = { it.name }) { f -> ChipButton(f.title, filter == f) { filter = f } }
+                    items(Filter.entries.filter { it != Filter.Posts || (feed.posts.isNotEmpty() && app.counstar.data.Settings.showPosts) }, key = { it.name }) { f -> ChipButton(f.title, filter == f) { filter = f } }
                 }
             }
             items(shown, key = { it.key }) { e ->

@@ -42,6 +42,7 @@
                 <data android:pathPrefix="/watch" />
                 <data android:pathPrefix="/live/" />
                 <data android:pathPrefix="/embed/" />
+                <data android:pathPrefix="/shorts/" />
                 <data android:pathPrefix="/channel/" />
                 <data android:pathPrefix="/@" />
             </intent-filter>

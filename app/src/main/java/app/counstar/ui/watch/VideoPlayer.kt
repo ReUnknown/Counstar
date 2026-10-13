@@ -120,6 +120,9 @@ class PlaybackState {
     var duration by mutableLongStateOf(0L)
     /** Width / height of the picture (16:9 until the video says otherwise). */
     var ratio by mutableFloatStateOf(16f / 9f)
+    /** A live stream, and whether it's at (or within a few seconds of) what's happening now. */
+    var live by mutableStateOf(false)
+    var atLiveEdge by mutableStateOf(true)
 }
 
 @Composable
@@ -132,6 +135,7 @@ fun rememberPlaybackState(player: Player): PlaybackState {
             state.duration = player.duration.coerceAtLeast(0L)
             state.position = player.currentPosition.coerceAtLeast(0L)
             state.buffered = player.bufferedPosition.coerceAtLeast(0L)
+            state.live = player.isCurrentMediaItemLive
             val size = player.videoSize
             if (size.width > 0 && size.height > 0) state.ratio = size.width * size.pixelWidthHeightRatio / size.height
         }
@@ -147,6 +151,8 @@ fun rememberPlaybackState(player: Player): PlaybackState {
             state.position = player.currentPosition.coerceAtLeast(0L)
             state.buffered = player.bufferedPosition.coerceAtLeast(0L)
             state.duration = player.duration.coerceAtLeast(0L)
+            state.live = player.isCurrentMediaItemLive
+            state.atLiveEdge = !state.live || player.currentLiveOffset.let { it == androidx.media3.common.C.TIME_UNSET || it < 15_000L }
             delay(200)
         }
     }
@@ -461,13 +467,30 @@ fun VideoPlayer(
                     ) {
                         if (target == null) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    "${formatTime(state.position)} / ${formatTime(state.duration)}",
-                                    color = Color.White,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.padding(start = 6.dp),
-                                )
+                                if (state.live) {
+                                    // LIVE: red when you're watching what's happening now; grey
+                                    // when you've gone back, and tapping it catches you up.
+                                    Row(
+                                        Modifier
+                                            .padding(start = 4.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(if (state.atLiveEdge) YouTubeRed else Color.White.copy(alpha = 0.25f))
+                                            .clickable { CounstarPlayer.player.seekToDefaultPosition() }
+                                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Box(Modifier.size(6.dp).clip(CircleShape).background(Color.White))
+                                        Text("LIVE", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 5.dp))
+                                    }
+                                } else {
+                                    Text(
+                                        "${formatTime(state.position)} / ${formatTime(state.duration)}",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(start = 6.dp),
+                                    )
+                                }
                                 chapterAt(chapters, state.position)?.let {
                                     Text(
                                         "  •  ${it.title}",

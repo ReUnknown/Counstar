@@ -176,7 +176,8 @@ sealed interface FeedEntry {
  * videos (a Posts tab has only posts) follow at the end.
  */
 fun mix(items: List<VideoItem>, posts: List<Post> = emptyList(), channels: List<ChannelItem> = emptyList()): List<FeedEntry> {
-    val postsAt = posts.groupBy { it.after.coerceIn(0, items.size) }
+    // Posts turned off in Settings: never shown.
+    val postsAt = posts.takeIf { Settings.showPosts }.orEmpty().groupBy { it.after.coerceIn(0, items.size) }
     val channelsAt = channels.groupBy { it.after.coerceIn(0, items.size) }
     return buildList {
         for (i in 0..items.size) {
