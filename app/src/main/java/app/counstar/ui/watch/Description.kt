@@ -9,6 +9,13 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -62,18 +69,27 @@ import kotlinx.coroutines.withContext
  * The full description, as a sheet: exact likes, views and release date, hashtags, the text,
  * the chapters (tap one to jump there), and the transcript.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun DescriptionSheet(item: VideoItem, info: WatchInfo, onDismiss: () -> Unit) {
+fun DescriptionPanel(item: VideoItem, info: WatchInfo, onClose: () -> Unit) {
     var transcript by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+    val onDismiss = onClose
+    androidx.activity.compose.BackHandler { if (transcript) transcript = false else onClose() }
+    // Same as the comments: it fills the space under the video, a header with an X on top.
+    Column(Modifier.fillMaxSize().background(colors.surfaceContainerLow)) {
         AnimatedContent(transcript, label = "description") { showTranscript ->
             if (showTranscript) {
-                Transcript(onBack = { transcript = false })
+                Transcript(onBack = { transcript = false }, onClose = onClose)
                 return@AnimatedContent
             }
-            LazyColumn(Modifier.fillMaxWidth().fillMaxHeight(0.9f)) {
+            Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Description", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.4).sp, modifier = Modifier.weight(1f))
+                IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, contentDescription = "Close description") }
+            }
+            HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.5f))
+            LazyColumn(Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())) {
                 item {
                     Text(
                         info.title.ifBlank { item.title },
@@ -151,6 +167,7 @@ fun DescriptionSheet(item: VideoItem, info: WatchInfo, onDismiss: () -> Unit) {
                     }
                 }
             }
+            }
         }
     }
 }
@@ -174,7 +191,7 @@ private fun Stat(value: String, label: String, shape: RoundedCornerShape, modifi
 /** The video's words, line by line with their times: tap a line to jump there. */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun Transcript(onBack: () -> Unit) {
+private fun Transcript(onBack: () -> Unit, onClose: () -> Unit) {
     val tracks = CounstarPlayer.captionTracks
     val track: CaptionTrack? = CounstarPlayer.caption
         ?: tracks.firstOrNull { it.language.startsWith("en") && !it.auto } ?: tracks.firstOrNull { !it.auto } ?: tracks.firstOrNull()
@@ -186,14 +203,16 @@ private fun Transcript(onBack: () -> Unit) {
     }
     val state = rememberPlaybackState(CounstarPlayer.player)
     val list = rememberLazyListState()
-    Column(Modifier.fillMaxWidth().fillMaxHeight(0.9f)) {
-        Row(Modifier.padding(start = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back") }
-            Column {
-                Text("Transcript", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to description") }
+            Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                Text("Transcript", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.4).sp)
                 track?.let { Text(it.name, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
+            IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, contentDescription = "Close description") }
         }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         val all = lines
         when {
             all == null -> Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { LoadingIndicator(Modifier.size(48.dp)) }

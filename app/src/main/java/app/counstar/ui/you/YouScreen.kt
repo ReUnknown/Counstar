@@ -111,6 +111,19 @@ fun YouScreen(session: Session, contentPadding: PaddingValues) {
                     (account?.handle ?: session.email)?.let {
                         Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                     }
+                    // Your own channel page, as everyone else sees it.
+                    account?.channelId?.let { id ->
+                        Row(
+                            Modifier
+                                .padding(top = 6.dp)
+                                .pressable(RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), pressedScale = 0.95f) { Nav.openChannel(id) }
+                                .padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("View channel", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(18.dp))
+                        }
+                    }
                 }
             }
         }
@@ -216,7 +229,7 @@ private fun SortChip(sort: Sort, onPick: (Sort) -> Unit) {
 }
 
 @Composable
-private fun PlaylistRow(p: Playlist, onClick: () -> Unit) {
+internal fun PlaylistRow(p: Playlist, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     Row(
         Modifier

@@ -114,6 +114,8 @@ fun SearchScreen(bottomPadding: androidx.compose.ui.unit.Dp) {
             modifier = Modifier.fillMaxSize(),
         ) {
             if (feed != null) {
+                // Channels that match come first, as cards in their own colors.
+                items(feed.channels.take(3), key = { "c" + it.id }) { channel -> app.counstar.ui.channel.ChannelResult(channel) }
                 items(feed.items, key = { it.id }) { item -> VideoCard(item, onClick = { Nav.watch(item) }) }
                 if (feed.loading) {
                     item { Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { LoadingIndicator(Modifier.size(56.dp)) } }

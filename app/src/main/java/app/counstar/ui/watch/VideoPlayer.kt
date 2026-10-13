@@ -100,6 +100,7 @@ import app.counstar.data.Settings
 import app.counstar.playback.CounstarPlayer
 import app.counstar.playback.Storyboard
 import app.counstar.ui.components.BlurredImage
+import app.counstar.ui.components.rememberHaptics
 import app.counstar.ui.components.PlayPauseIcon
 import app.counstar.ui.theme.YouTubeRed
 import coil3.compose.AsyncImagePainter
@@ -244,6 +245,7 @@ fun VideoPlayer(
     val density = LocalDensity.current
     var controls by remember { mutableStateOf(true) }
     var scrubAt by remember { mutableStateOf<Long?>(null) }
+    val haptics = rememberHaptics()
     var settingsOpen by remember { mutableStateOf(false) }
     var captionsOpen by remember { mutableStateOf(false) }
     var holding by remember { mutableStateOf(false) }
@@ -289,6 +291,7 @@ fun VideoPlayer(
                             if (side == 0) {
                                 if (player.isPlaying) player.pause() else player.play()
                             } else {
+                                haptics.tick()
                                 player.seekTo((player.currentPosition + side * 10_000L).coerceIn(0L, player.duration.coerceAtLeast(0L)))
                                 if (skipSide != side) skipSeconds = 0
                                 skipSide = side
@@ -297,6 +300,7 @@ fun VideoPlayer(
                             }
                         },
                         onLongPress = {
+                            haptics.hold()
                             holding = true
                             controls = false
                             CounstarPlayer.holdFast(true)
@@ -549,6 +553,9 @@ private fun SeekBar(state: PlaybackState, heatmap: List<Float>, chapters: List<C
     var fraction by remember { mutableFloatStateOf(0f) }
     // Silent while scrubbing, like YouTube: the video holds still and picks up again once you let go.
     var resumeAfter by remember { mutableStateOf(false) }
+    val haptics = rememberHaptics()
+    // The chapter under the handle while scrubbing: a tick each time it changes.
+    var chapterIndex by remember { mutableIntStateOf(-1) }
     val duration = state.duration.coerceAtLeast(1L)
     val shown = if (dragging) fraction else state.position.toFloat() / duration
     val buffered = state.buffered.toFloat() / duration
@@ -579,6 +586,8 @@ private fun SeekBar(state: PlaybackState, heatmap: List<Float>, chapters: List<C
                                 player.pause()
                                 // From where the video is, not where the finger landed.
                                 fraction = (player.currentPosition.toFloat() / duration).coerceIn(0f, 1f)
+                                chapterIndex = chapters.indexOfLast { it.startMs <= fraction * duration }
+                                haptics.drag()
                                 dragging = true
                                 onScrub((fraction * duration).toLong())
                             },
@@ -599,6 +608,11 @@ private fun SeekBar(state: PlaybackState, heatmap: List<Float>, chapters: List<C
                             onHorizontalDrag = { change, amount ->
                                 change.consume()
                                 fraction = (fraction + amount / size.width).coerceIn(0f, 1f)
+                                val now = chapters.indexOfLast { it.startMs <= fraction * duration }
+                                if (now != chapterIndex) {
+                                    chapterIndex = now
+                                    haptics.tick()
+                                }
                                 onScrub((fraction * duration).toLong())
                             },
                         )

@@ -32,6 +32,9 @@ class Feed(
     /** The filter chips YouTube offers above this feed. */
     var chips by mutableStateOf<List<Chip>>(emptyList())
         private set
+    /** Channels in the first page (search results). */
+    var channels by mutableStateOf<List<ChannelItem>>(emptyList())
+        private set
     private var continuation: String? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var job: Job? = null
@@ -51,6 +54,7 @@ class Feed(
                         items = page.items
                         continuation = page.continuation
                         if (page.chips.isNotEmpty()) chips = page.chips
+                        channels = page.channels
                         loadedOnce = true
                     }
                     .onFailure { error = "Couldn't load videos. Check your connection and try again." }
@@ -97,6 +101,9 @@ class Feed(
         /** A feed that starts from a continuation token (a chip's), e.g. a home or Up next filter. */
         fun browseFrom(token: String) = Feed({ WebApi.browseContinuation(token) }, { WebApi.browseContinuation(it) })
         fun nextFrom(token: String) = Feed({ WebApi.nextContinuation(token) }, { WebApi.nextContinuation(it) })
+
+        /** A channel tab (Home, Videos, Live, Playlists) by its params. */
+        fun channelTab(channelId: String, params: String) = Feed({ YouTube.rawBrowse(browseId = channelId, params = params) }, { WebApi.browseContinuation(it) })
 
         /** A channel's videos tab, newest first. */
         fun channelVideos(channelId: String) = Feed({ YouTube.rawBrowse(browseId = channelId, params = "EgZ2aWRlb3PyBgQKAjoA") }, { WebApi.browseContinuation(it) })
@@ -189,5 +196,67 @@ object Library {
         playlists = emptyList()
         account = null
         loaded = false
+    }
+}
+
+/** A channel page: its header, then the tabs' feeds as they're opened. */
+@androidx.compose.runtime.Stable
+class ChannelPage(val id: String) {
+    var info by mutableStateOf<ChannelInfo?>(null)
+        private set
+    var failed by mutableStateOf(false)
+        private set
+    /** Playlists on the Playlists tab. */
+    var playlists by mutableStateOf<List<Playlist>?>(null)
+        private set
+    val home = Feed.channelTab(id, "EghmZWF0dXJlZPIGBAoCMgA=")
+    val videos = Feed.channelVideos(id)
+    val live = Feed.channelTab(id, "EgdzdHJlYW1z8gYECgJ6AA==")
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    fun load() {
+        if (info != null) return
+        scope.launch {
+            withContext(Dispatchers.IO) { YouTube.rawBrowse(browseId = id).mapCatching { YouTubeParser.channel(id, it) } }
+                .onSuccess { info = it; Channels.remember(it) }
+                .onFailure { failed = true }
+        }
+    }
+
+    fun loadPlaylists() {
+        if (playlists != null) return
+        scope.launch {
+            playlists = withContext(Dispatchers.IO) {
+                YouTube.rawBrowse(browseId = id, params = "EglwbGF5bGlzdHPyBgQKAkIA").mapCatching { YouTubeParser.playlists(it).first }
+            }.getOrDefault(emptyList())
+        }
+    }
+}
+
+/** Channel headers already fetched (search cards show banners without asking twice). */
+object Channels {
+    private val known = androidx.compose.runtime.mutableStateMapOf<String, ChannelInfo>()
+    private val pages = HashMap<String, ChannelPage>()
+
+    fun remember(info: ChannelInfo) {
+        known[info.id] = info
+    }
+
+    fun info(id: String): ChannelInfo? = known[id]
+
+    /** The page for a channel, kept so going back and forth doesn't reload it. */
+    fun page(id: String): ChannelPage = pages.getOrPut(id) { ChannelPage(id) }
+
+    /** Your subscriptions, all of them (YouTube's channel list). */
+    var subscriptions by mutableStateOf<List<ChannelItem>?>(null)
+        private set
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    fun loadSubscriptions(force: Boolean = false) {
+        if (subscriptions != null && !force) return
+        scope.launch {
+            subscriptions = withContext(Dispatchers.IO) { WebApi.browse("FEchannels").mapCatching { YouTubeParser.feed(it).channels } }
+                .getOrDefault(emptyList())
+        }
     }
 }

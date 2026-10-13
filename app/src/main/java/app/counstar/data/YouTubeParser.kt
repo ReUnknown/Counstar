@@ -33,8 +33,30 @@ data class VideoItem(
 /** A filter chip above a feed ("All", "Music", ...): selecting it loads [token]. */
 data class Chip(val title: String, val token: String?, val selected: Boolean)
 
-/** One page of a feed, the token for the next page if there is one, and the feed's chips. */
-data class FeedPage(val items: List<VideoItem>, val continuation: String?, val chips: List<Chip> = emptyList())
+/** One page of a feed, the token for the next page if there is one, the feed's chips, and channels in it (search). */
+data class FeedPage(
+    val items: List<VideoItem>,
+    val continuation: String?,
+    val chips: List<Chip> = emptyList(),
+    val channels: List<ChannelItem> = emptyList(),
+)
+
+/** A channel as a search result or in your subscriptions. */
+data class ChannelItem(val id: String, val title: String, val avatar: String?, val handle: String? = null, val subscribers: String? = null)
+
+/** A channel page's header. */
+data class ChannelInfo(
+    val id: String,
+    val title: String,
+    val handle: String?,
+    val avatar: String?,
+    val banner: String?,
+    val subscribers: String?,
+    val videoCount: String?,
+    val description: String?,
+    val subscribed: Boolean,
+    val bellOptions: List<BellOption>,
+)
 
 data class Comment(
     val id: String,
@@ -105,7 +127,7 @@ data class Playlist(
 }
 
 /** Who's signed in, as YouTube shows it. */
-data class Account(val name: String?, val handle: String?, val photo: String?)
+data class Account(val name: String?, val handle: String?, val photo: String?, val channelId: String? = null)
 
 /** One entry in the notifications inbox. */
 data class Notification(
@@ -182,8 +204,10 @@ object YouTubeParser {
         val found = LinkedHashMap<String, VideoItem>()
         var continuation: String? = null
         val chips = mutableListOf<Chip>()
+        val channels = LinkedHashMap<String, ChannelItem>()
         walk(root) { key, value ->
             when (key) {
+                "channelRenderer", "gridChannelRenderer" -> (value as? JSONObject)?.let(::channelRenderer)?.let { channels.putIfAbsent(it.id, it) }
                 "chipCloudChipRenderer" -> (value as? JSONObject)?.let { chip ->
                     val title = text(chip.optJSONObject("text")) ?: return@let
                     // A shortcut to YouTube's feed editor, not a filter.
@@ -214,7 +238,7 @@ object YouTubeParser {
             }
         }
         val items = if (sections.isEmpty()) found.values.toList() else found.values.map { it.copy(section = sections[it.id]) }
-        return FeedPage(items, continuation, chips)
+        return FeedPage(items, continuation, chips, channels.values.toList())
     }
 
     fun watch(json: String): WatchInfo {
@@ -562,6 +586,53 @@ object YouTubeParser {
             name = text(header?.optJSONObject("accountName")),
             handle = text(header?.optJSONObject("channelHandle")),
             photo = bestThumbnail(header?.optJSONObject("accountPhoto")),
+            // "Your channel" in the menu links to it.
+            channelId = Regex("\"browseId\":\"(UC[\\w-]{22})\"").find(json)?.groupValues?.get(1),
+        )
+    }
+
+    /** A channel search result (YouTube now puts the handle in subscriberCountText and the subscribers in videoCountText). */
+    private fun channelRenderer(c: JSONObject): ChannelItem? {
+        val id = c.optString("channelId").takeIf { it.startsWith("UC") } ?: return null
+        val texts = listOfNotNull(text(c.optJSONObject("subscriberCountText")), text(c.optJSONObject("videoCountText")))
+        return ChannelItem(
+            id = id,
+            title = text(c.optJSONObject("title")) ?: return null,
+            avatar = bestThumbnail(c.optJSONObject("thumbnail"))?.let { if (it.startsWith("//")) "https:$it" else it }?.let(::fixUrl),
+            handle = texts.firstOrNull { it.startsWith("@") },
+            subscribers = texts.firstOrNull { "subscriber" in it },
+        )
+    }
+
+    /** A channel page's header (pageHeaderViewModel, or the older c4TabbedHeaderRenderer). */
+    fun channel(id: String, json: String): ChannelInfo {
+        val root = JSONObject(json)
+        val header = findFirst(root.optJSONObject("header"), "pageHeaderViewModel")
+        val old = findFirst(root.optJSONObject("header"), "c4TabbedHeaderRenderer")
+        val parts = mutableListOf<String>()
+        findFirst(header?.optJSONObject("metadata"), "contentMetadataViewModel")?.optJSONArray("metadataRows")?.let { rows ->
+            for (r in 0 until rows.length()) {
+                val ps = rows.optJSONObject(r)?.optJSONArray("metadataParts") ?: continue
+                for (i in 0 until ps.length()) ps.optJSONObject(i)?.optJSONObject("text")?.optString("content")?.takeIf { it.isNotBlank() }?.let(parts::add)
+            }
+        }
+        val meta = root.optJSONObject("metadata")?.optJSONObject("channelMetadataRenderer")
+        val actions = header?.optJSONObject("actions") ?: old
+        val raw = actions?.toString().orEmpty()
+        return ChannelInfo(
+            id = id,
+            title = header?.optJSONObject("title")?.let { findFirst(it, "text") }?.optString("content")?.takeIf { it.isNotBlank() }
+                ?: text(old?.optJSONObject("title")) ?: meta?.optString("title").orEmpty(),
+            handle = parts.firstOrNull { it.startsWith("@") } ?: text(old?.optJSONObject("channelHandleText")),
+            avatar = findFirst(header?.optJSONObject("image"), "image")?.let(::bestSource)
+                ?: bestThumbnail(old?.optJSONObject("avatar")) ?: bestThumbnail(meta?.optJSONObject("avatar")),
+            banner = findFirst(header?.optJSONObject("banner"), "image")?.let(::bestSource) ?: bestThumbnail(old?.optJSONObject("banner")),
+            subscribers = parts.firstOrNull { "subscriber" in it } ?: text(old?.optJSONObject("subscriberCountText")),
+            videoCount = parts.firstOrNull { "video" in it } ?: text(old?.optJSONObject("videosCountText")),
+            description = findFirst(header?.optJSONObject("description"), "description")?.optString("content")?.takeIf { it.isNotBlank() }
+                ?: meta?.optString("description")?.takeIf { it.isNotBlank() },
+            subscribed = "\"subscribed\":true" in raw || "\"isSubscribed\":true" in raw,
+            bellOptions = bellOptions(actions),
         )
     }
 

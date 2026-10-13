@@ -65,6 +65,7 @@ fun FeedScreen(
     val scope = rememberCoroutineScope()
     val list = rememberLazyListState()
     var refreshing by remember { mutableStateOf(false) }
+    val haptics = app.counstar.ui.components.rememberHaptics()
     LaunchedEffect(feed) { feed.load() }
     val nearEnd by remember {
         derivedStateOf {
@@ -89,6 +90,7 @@ fun FeedScreen(
         },
         onRefresh = {
             scope.launch {
+                haptics.tick()
                 refreshing = true
                 feed.refresh()
                 list.scrollToItem(0)

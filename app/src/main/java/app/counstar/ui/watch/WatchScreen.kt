@@ -7,6 +7,8 @@ import androidx.compose.animation.core.spring
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.platform.LocalDensity
 import app.counstar.ui.components.SaveToPlaylistSheet
+import app.counstar.ui.components.rememberArtColorScheme
+import app.counstar.ui.components.rememberHaptics
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -78,6 +80,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -148,6 +151,7 @@ fun WatchScreen(fullscreen: Boolean, onToggleFullscreen: () -> Unit) {
 
     val list = rememberLazyListState()
     var commentsOpen by remember(item.id) { mutableStateOf(false) }
+    var descriptionOpen by remember(item.id) { mutableStateOf(false) }
     val details = info
     val comments = remember(details?.commentsToken) {
         details?.commentsToken?.let { CommentsState(it, details.commentSorts, details.commentCount) }
@@ -219,7 +223,15 @@ fun WatchScreen(fullscreen: Boolean, onToggleFullscreen: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
             )
             Box(Modifier.fillMaxSize()) {
-                WatchDetails(item, info, raw, failed, list, comments, onOpenComments = { commentsOpen = true })
+                WatchDetails(item, info, raw, failed, list, comments, onOpenComments = { commentsOpen = true }, onOpenDescription = { descriptionOpen = true })
+                // The description opens the same way, in the same space.
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = descriptionOpen && details != null,
+                    enter = slideInVertically(tween(340)) { it } + fadeIn(tween(160)),
+                    exit = slideOutVertically(tween(260)) { it } + fadeOut(tween(200)),
+                ) {
+                    details?.let { DescriptionPanel(item, it, onClose = { descriptionOpen = false }) }
+                }
                 // Comments take over everything under the video, like YouTube's app.
                 androidx.compose.animation.AnimatedVisibility(
                     visible = commentsOpen && comments != null,
@@ -243,10 +255,11 @@ private fun WatchDetails(
     list: LazyListState,
     comments: CommentsState?,
     onOpenComments: () -> Unit,
+    onOpenDescription: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    var describing by remember(item.id) { mutableStateOf(false) }
+    val haptics = rememberHaptics()
     var saving by remember(item.id) { mutableStateOf(false) }
     var liked by remember(item.id, details) { mutableStateOf(details?.liked ?: false) }
     var disliked by remember(item.id, details) { mutableStateOf(details?.disliked ?: false) }
@@ -324,7 +337,7 @@ private fun WatchDetails(
                     Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp)
-                        .clickable { if (details != null) describing = true },
+                        .clickable { if (details != null) onOpenDescription() },
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Text(
@@ -350,6 +363,15 @@ private fun WatchDetails(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
+                    // The avatar and name open the channel.
+                    Row(
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(24.dp))
+                            .clickable { Nav.openChannel(details?.channelId ?: item.channelId) },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
                     Avatar(details?.channelAvatar ?: item.channelAvatar, 40.dp)
                     Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
@@ -363,8 +385,12 @@ private fun WatchDetails(
                             Text(it.removeSuffix(" subscribers"), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1)
                         }
                     }
+                    }
                     val channelId = details?.channelId
-                    if (channelId != null) SubscribeButton(channelId, details.subscribed, details.bellOptions)
+                    if (channelId != null) {
+                        val channelColors = rememberArtColorScheme(details.channelAvatar)
+                        SubscribeButton(channelId, details.subscribed, details.bellOptions, accent = channelColors.primary, onAccent = channelColors.onPrimary)
+                    }
                 }
             }
             item(key = "actions") {
@@ -379,6 +405,7 @@ private fun WatchDetails(
                                 active = liked,
                                 shape = RoundedCornerShape(20.dp, 6.dp, 6.dp, 20.dp),
                             ) {
+                                haptics.click()
                                 val want = !liked
                                 liked = want
                                 if (want) disliked = false
@@ -393,6 +420,7 @@ private fun WatchDetails(
                                 shape = RoundedCornerShape(6.dp, 20.dp, 20.dp, 6.dp),
                                 description = "Dislike",
                             ) {
+                                haptics.click()
                                 val want = !disliked
                                 disliked = want
                                 if (want) liked = false
@@ -441,7 +469,6 @@ private fun WatchDetails(
         }
 
 
-        if (describing && details != null) DescriptionSheet(item, details) { describing = false }
         if (saving) SaveToPlaylistSheet(item.id) { saving = false }
 
         // Once the chips scroll up to the top, they stay there on frosted glass.
@@ -458,9 +485,19 @@ private fun WatchDetails(
  * subscribed, it's a bell: tap it for all / personalized / none, or to unsubscribe.
  */
 @Composable
-private fun SubscribeButton(channelId: String, initiallySubscribed: Boolean, options: List<BellOption>) {
+fun SubscribeButton(
+    channelId: String,
+    initiallySubscribed: Boolean,
+    options: List<BellOption>,
+    /** The channel's own color (from its picture), instead of plain white. */
+    accent: Color? = null,
+    onAccent: Color? = null,
+    modifier: Modifier = Modifier,
+    big: Boolean = false,
+) {
     val scope = rememberCoroutineScope()
     val colors = MaterialTheme.colorScheme
+    val haptics = rememberHaptics()
     var subscribed by remember(channelId, initiallySubscribed) { mutableStateOf(initiallySubscribed) }
     var bell by remember(channelId, options) {
         mutableStateOf(options.firstOrNull { it.selected }?.kind ?: BellOption.Kind.Personalized)
@@ -472,24 +509,29 @@ private fun SubscribeButton(channelId: String, initiallySubscribed: Boolean, opt
         if (!subscribed) {
             Text(
                 "Subscribe",
-                color = colors.surface,
+                color = onAccent ?: colors.surface,
                 fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
-                modifier = Modifier
-                    .pressable(RoundedCornerShape(20.dp), color = colors.onSurface) {
+                fontSize = if (big) 15.sp else 14.sp,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = modifier
+                    .pressable(RoundedCornerShape(if (big) 25.dp else 20.dp), color = accent ?: colors.onSurface) {
+                        haptics.click()
                         subscribed = true
                         bell = BellOption.Kind.Personalized
                         scope.launch { WebApi.subscribe(channelId).onFailure { subscribed = false; toast("Couldn't subscribe: ${it.message}") } }
                     }
-                    .padding(horizontal = 18.dp, vertical = 10.dp),
+                    .padding(horizontal = 18.dp, vertical = if (big) 15.dp else 10.dp),
             )
         } else {
             Row(
-                Modifier
-                    .pressable(RoundedCornerShape(20.dp), color = colors.onSurface.copy(alpha = 0.1f)) { menu = true }
-                    .padding(start = 12.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
+                modifier
+                    .pressable(RoundedCornerShape(if (big) 25.dp else 20.dp), color = (accent ?: colors.onSurface).copy(alpha = if (accent != null) 0.22f else 0.1f)) {
+                        haptics.click()
+                        menu = true
+                    }
+                    .padding(start = 12.dp, end = 10.dp, top = if (big) 13.dp else 8.dp, bottom = if (big) 13.dp else 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
             ) {
                 Icon(bellIcon(bell), contentDescription = null, modifier = Modifier.size(20.dp))
                 Text("Subscribed", fontWeight = FontWeight.Bold, fontSize = 14.sp)

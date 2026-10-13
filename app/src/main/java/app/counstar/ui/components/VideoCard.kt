@@ -1,6 +1,7 @@
 package app.counstar.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -124,7 +125,13 @@ fun VideoCard(item: VideoItem, onClick: () -> Unit, modifier: Modifier = Modifie
     ) {
         Thumbnail(item, Modifier.fillMaxWidth(), corner = 0.dp)
         Row(Modifier.padding(start = 12.dp, end = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Avatar(item.channelAvatar, 40.dp, ring = if (item.isLive) YouTubeRed else null)
+            // The avatar opens the channel, like YouTube's.
+            Avatar(
+                item.channelAvatar,
+                40.dp,
+                ring = if (item.isLive) YouTubeRed else null,
+                modifier = Modifier.clip(CircleShape).clickable(enabled = item.channelId != null) { app.counstar.ui.Nav.openChannel(item.channelId) },
+            )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     item.title,

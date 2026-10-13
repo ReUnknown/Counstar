@@ -69,6 +69,10 @@ import app.counstar.ui.watch.MiniPlayerHeight
 import app.counstar.ui.watch.WatchScreen
 import app.counstar.ui.welcome.WelcomeScreen
 import app.counstar.ui.you.HistoryScreen
+import app.counstar.ui.channel.ChannelScreen
+import app.counstar.ui.subscriptions.AllSubscriptionsScreen
+import app.counstar.ui.subscriptions.SubscriptionsScreen
+import androidx.compose.runtime.key
 import app.counstar.ui.you.PlaylistScreen
 import app.counstar.ui.you.YouScreen
 import dev.chrisbanes.haze.hazeEffect
@@ -158,20 +162,16 @@ private fun Shell(session: Session) {
                     "Watch a few videos and your recommendations will show up here.",
                     refreshOffset = statusBar + barHeight,
                 )
-                Tab.Subscriptions -> FeedScreen(
-                    Feeds.subscriptions,
-                    padding,
-                    "Subscribe to channels to see their new videos here.",
-                    refreshOffset = statusBar + barHeight,
-                )
+                Tab.Subscriptions -> SubscriptionsScreen(padding, refreshOffset = statusBar + barHeight)
                 Tab.You -> YouScreen(session, padding)
             }
-            when {
-                Nav.searchOpen -> SearchScreen(bottomPadding = bottom)
-                Nav.notificationsOpen -> NotificationsScreen(bottomPadding = bottom)
-                Nav.playlist != null -> PlaylistScreen(Nav.playlist!!, bottomPadding = bottom)
-                Nav.historyOpen -> HistoryScreen(bottomPadding = bottom)
-            }
+            // Pages stack: the one opened last is on top (and gets back first).
+            if (Nav.searchOpen) SearchScreen(bottomPadding = bottom)
+            if (Nav.notificationsOpen) NotificationsScreen(bottomPadding = bottom)
+            if (Nav.historyOpen) HistoryScreen(bottomPadding = bottom)
+            if (Nav.allSubscriptionsOpen) AllSubscriptionsScreen(bottomPadding = bottom)
+            Nav.channels.lastOrNull()?.let { id -> key(id) { ChannelScreen(id, bottomPadding = bottom) } }
+            Nav.playlist?.let { PlaylistScreen(it, bottomPadding = bottom) }
         }
 
         // Top: one even pane of frosted glass from the very top of the screen down to the
@@ -193,7 +193,7 @@ private fun Shell(session: Session) {
                 // The bar slides up under the status bar: keep its content out of the clock.
                 Box(Modifier.fillMaxWidth().height(statusBar).hazeEffect(haze, glass))
             }
-        } else if (Nav.playlist == null) {
+        } else if (Nav.playlist == null && Nav.channels.isEmpty()) {
             Box(Modifier.fillMaxWidth().height(statusBar).background(MaterialTheme.colorScheme.background))
         }
 

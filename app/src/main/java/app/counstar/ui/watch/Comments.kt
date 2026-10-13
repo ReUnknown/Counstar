@@ -102,6 +102,7 @@ import app.counstar.data.Comment
 import app.counstar.data.YouTubeParser
 import app.counstar.ui.ChipButton
 import app.counstar.ui.components.Avatar
+import app.counstar.ui.components.rememberHaptics
 import app.counstar.ui.components.pressable
 import app.counstar.ui.theme.YouTubeRed
 import com.metrolist.innertube.WebApi
@@ -320,7 +321,8 @@ private fun depths(replies: List<Comment>): List<Int> {
     return replies.map { r ->
         val mention = Regex("^@([^\\s]+)").find(r.text.trim())?.groupValues?.get(1)?.trimEnd(',', '.', ':', '!', '?')
         val depth = when {
-            mention != null && latest.containsKey("@$mention") -> (latest.getValue("@$mention") + 1).coerceAtMost(4)
+            // Only two levels, like YouTube: replies to replies (at any depth) share one thread.
+            mention != null && latest.containsKey("@$mention") -> 2
             mention == null && previous?.author == r.author -> previousDepth
             else -> 1
         }
@@ -358,6 +360,7 @@ private fun Thread(parent: Comment, onBack: () -> Unit, onClose: () -> Unit) {
             }
             itemsIndexed(replies.comments, key = { _, c -> c.id }) { i, c ->
                 val depth = levels.getOrElse(i) { 1 }
+                val nextNested = levels.getOrElse(i + 1) { 1 } == 2
                 val lineColor = colors.outlineVariant
                 CommentRow(
                     c,
@@ -365,20 +368,26 @@ private fun Thread(parent: Comment, onBack: () -> Unit, onClose: () -> Unit) {
                     onOpen = null,
                     onReply = { replyTo = c },
                     showReplies = false,
-                    start = 64.dp + 36.dp * (depth - 1),
-                    modifier = if (depth < 2) Modifier else Modifier.drawBehind {
-                        // A reply to a reply: a line down from the reply it answers, curving in.
-                        val x = (64.dp + 36.dp * (depth - 2) + 14.dp).toPx()
-                        val elbowY = 26.dp.toPx()
-                        val toX = (64.dp + 36.dp * (depth - 1) - 2.dp).toPx()
+                    start = if (depth == 2) 100.dp else 64.dp,
+                    modifier = Modifier.drawBehind {
+                        // One connected line: down from a reply's avatar, past its nested
+                        // replies, curving into each.
+                        val x = 78.dp.toPx()
                         val stroke = 2.dp.toPx()
-                        val path = androidx.compose.ui.graphics.Path().apply {
-                            moveTo(x, 0f)
-                            lineTo(x, elbowY - 10.dp.toPx())
-                            quadraticTo(x, elbowY, x + 10.dp.toPx(), elbowY)
-                            lineTo(toX, elbowY)
+                        if (depth == 1 && nextNested) {
+                            drawLine(lineColor, androidx.compose.ui.geometry.Offset(x, 44.dp.toPx()), androidx.compose.ui.geometry.Offset(x, size.height), stroke)
                         }
-                        drawPath(path, lineColor, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+                        if (depth == 2) {
+                            val elbowY = 26.dp.toPx()
+                            val path = androidx.compose.ui.graphics.Path().apply {
+                                moveTo(x, 0f)
+                                lineTo(x, elbowY - 10.dp.toPx())
+                                quadraticTo(x, elbowY, x + 10.dp.toPx(), elbowY)
+                                lineTo(98.dp.toPx(), elbowY)
+                            }
+                            drawPath(path, lineColor, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+                            if (nextNested) drawLine(lineColor, androidx.compose.ui.geometry.Offset(x, 0f), androidx.compose.ui.geometry.Offset(x, size.height), stroke)
+                        }
                     },
                 )
             }
@@ -412,6 +421,7 @@ private fun Composer(
     val scope = rememberCoroutineScope()
     var text by remember(prefill) { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(prefill, androidx.compose.ui.text.TextRange(prefill.length))) }
     var sending by remember { mutableStateOf(false) }
+    val haptics = rememberHaptics()
     val focus = remember { androidx.compose.ui.focus.FocusRequester() }
     LaunchedEffect(prefill) { if (prefill.isNotEmpty()) runCatching { focus.requestFocus() } }
     HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.5f))
@@ -459,6 +469,7 @@ private fun Composer(
                         scope.launch {
                             withContext(Dispatchers.IO) { post(body) }
                                 .onSuccess {
+                                    haptics.confirm()
                                     onPosted(body)
                                     text = androidx.compose.ui.text.input.TextFieldValue("")
                                 }
@@ -610,7 +621,9 @@ private fun CommentRow(
     val scope = rememberCoroutineScope()
     val liked = Votes.liked[c.id] ?: c.liked
     val disliked = Votes.disliked[c.id] ?: c.disliked
+    val haptics = rememberHaptics()
     fun vote(like: Boolean) {
+        haptics.click()
         val wasLiked = liked
         val wasDisliked = disliked
         val action = when {
