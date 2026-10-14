@@ -167,11 +167,11 @@ object Ambient {
 /** Just the picture, fitted into its box. [sampleAmbient] keeps [Ambient.frame] up to date. */
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-fun VideoSurface(modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Fit, sampleAmbient: Boolean = false) {
+fun VideoSurface(modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Fit, sampleAmbient: Boolean = false, alignment: Alignment = Alignment.Center) {
     val player = CounstarPlayer.player
     val presentation = rememberPresentationState(player)
     var texture by remember { mutableStateOf<TextureView?>(null) }
-    Box(modifier, contentAlignment = Alignment.Center) {
+    Box(modifier, contentAlignment = alignment) {
         AndroidView(
             factory = { context -> TextureView(context).also { texture = it; player.setVideoTextureView(it) } },
             onRelease = { player.clearVideoTextureView(it) },

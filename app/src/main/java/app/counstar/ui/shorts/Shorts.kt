@@ -192,8 +192,12 @@ fun ShortsPlayer(queue: ShortsQueue, onClose: (() -> Unit)?, active: Boolean = t
         DisposableEffect(queue) {
             val listener = object : Player.Listener {
                 override fun onPlaybackStateChanged(state: Int) {
-                    if (state == Player.STATE_ENDED && Settings.shortsAutoScroll && CounstarPlayer.current?.isShort == true) {
-                        scope.launch { pager.animateScrollToPage((pager.settledPage + 1).coerceAtMost(items.size - 1)) }
+                    // Down to the next one: by the pager's live count (this listener outlives the
+                    // list it was made with, which once sent it back up), and only past the end.
+                    if (state != Player.STATE_ENDED || !Settings.shortsAutoScroll || CounstarPlayer.current?.isShort != true) return
+                    val next = pager.settledPage + 1
+                    if (next < pager.pageCount && CounstarPlayer.current?.id == queue.items.getOrNull(pager.settledPage)?.id) {
+                        scope.launch { pager.animateScrollToPage(next) }
                     }
                 }
             }
@@ -264,20 +268,14 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
         val colors = MaterialTheme.colorScheme
         val state = rememberPlaybackState(CounstarPlayer.player)
         val mine = playing && CounstarPlayer.current?.id == item.id
-        val frame = if (mine) Ambient.frame else null
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            // Acrylic bars: the Short's own picture, blurred, fills what the video doesn't
-            // (it's never cropped to fit).
-            if (frame != null) {
-                Image(frame, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(48.dp, BlurredEdgeTreatment.Rectangle))
-            } else {
-                BlurredImage(item.thumbnail, Modifier.fillMaxSize(), radius = 64.dp)
-            }
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f)))
+            // The whole video (never cropped), sitting right on top of the bottom bar; any room
+            // left over is black, at the top, under the back and menu buttons.
+            val area = Modifier.fillMaxSize().padding(bottom = bottomInset)
             if (mine) {
-                VideoSurface(Modifier.fillMaxSize(), contentScale = ContentScale.Fit, sampleAmbient = true)
+                VideoSurface(area, contentScale = ContentScale.Fit, alignment = Alignment.BottomCenter)
             } else {
-                AsyncImage(item.thumbnail, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                AsyncImage(item.thumbnail, contentDescription = null, contentScale = ContentScale.Fit, alignment = Alignment.BottomCenter, modifier = area)
             }
             Box(Modifier.fillMaxWidth().height(150.dp).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.45f), Color.Transparent))))
             Box(
