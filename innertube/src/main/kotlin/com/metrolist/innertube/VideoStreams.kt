@@ -38,7 +38,13 @@ object VideoStreams {
         val statsUrl: String? = null,
         /** Every height the video comes in (for this phone's codecs), tallest first. */
         val heights: List<Int> = emptyList(),
+        /** The video's audio languages (dubbed videos have several), and the one playing. */
+        val audioTracks: List<AudioTrack> = emptyList(),
+        val audioTrack: String? = null,
     )
+
+    /** One of a video's audio tracks: "English (original)", "Spanish", ... */
+    data class AudioTrack(val id: String, val name: String, val original: Boolean)
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
@@ -55,6 +61,10 @@ object VideoStreams {
         cipher: ExtractionCipherService,
         poToken: suspend (videoId: String, visitorData: String) -> PoTokenResult?,
         log: (String) -> Unit = {},
+        /** Known to be live (from the card): go straight to the live stream. */
+        live: Boolean = false,
+        /** An audio track picked by its id (null: the video's original). */
+        audioTrack: String? = null,
     ): Stream {
         val innerTube = YouTube.extractionTransport().innerTube
         // The embed page's player script is much smaller than the watch page's, so deciphering
@@ -67,6 +77,7 @@ object VideoStreams {
             configParser.fetchConfig(videoId, useLoginCookies = signedIn)
         }
         val visitorData = config.visitorData ?: innerTube.visitorData.orEmpty()
+        if (live) liveStream(videoId, config, visitorData, log)?.let { return it }
         var lastProblem = "No playable stream"
         for (client in clients) {
             try {
@@ -100,16 +111,40 @@ object VideoStreams {
                         ?.optString("baseUrl")
                         ?.takeIf { it.isNotBlank() }
                 }.getOrNull()
+                // A live stream has no files to pick, only an HLS playlist.
+                if (JSONObject(text).optJSONObject("videoDetails")?.optBoolean("isLive") == true) {
+                    liveStream(videoId, config, visitorData, log)?.let { return it }
+                    lastProblem = "Couldn't load this live stream"
+                    continue
+                }
                 val response = json.decodeFromString<PlayerResponse>(text)
                 if (response.playabilityStatus.status != "OK") {
                     lastProblem = response.playabilityStatus.reason ?: response.playabilityStatus.status
                     log("${client.clientName}: ${response.playabilityStatus.status}")
                     continue
                 }
-                val formats = response.streamingData?.adaptiveFormats.orEmpty()
+                // Dubbed videos have an audio track per language: play the picked one, else the
+                // original (otherwise the best-sounding stream could be any dub).
+                val tracksByItag = HashMap<Int, AudioTrack>()
+                JSONObject(text).optJSONObject("streamingData")?.optJSONArray("adaptiveFormats")?.let { list ->
+                    for (i in 0 until list.length()) {
+                        val f = list.optJSONObject(i) ?: continue
+                        val t = f.optJSONObject("audioTrack") ?: continue
+                        val id = t.optString("id").takeIf { it.isNotBlank() } ?: continue
+                        tracksByItag[f.optInt("itag")] = AudioTrack(id, t.optString("displayName").ifBlank { id }, t.optBoolean("audioIsDefault"))
+                    }
+                }
+                val tracks = tracksByItag.values.distinctBy { it.id }.sortedByDescending { it.original }
+                val wanted = tracks.firstOrNull { it.id == audioTrack } ?: tracks.firstOrNull { it.original } ?: tracks.firstOrNull()
+                val formats = response.streamingData?.adaptiveFormats.orEmpty().filter { f ->
+                    wanted == null || !f.isAudio || tracksByItag[f.itag]?.id.let { it == null || it == wanted.id }
+                }
                 // AV1 isn't decoded in hardware on many phones. VP9 is on most, H.264 on all.
                 val videoFormats = formats.filter { !it.isAudio && "av01" !in it.mimeType && (allowVp9 || "vp9" !in it.mimeType) }
-                val video = selectBestVideoFormat(videoFormats, requireUrl = false, maxHeight = maxHeight)
+                // "1080p" means the shorter side: a vertical Short at 1080x1920 is 1080p, not
+                // too tall (judged by height alone it fell to 480p and looked pixelated).
+                val fitting = videoFormats.filter { side(it.width, it.height).let { s -> s == 0 || s <= maxHeight } }.ifEmpty { videoFormats }
+                val video = selectBestVideoFormat(fitting, requireUrl = false, maxHeight = Int.MAX_VALUE)
                 val audio = selectBestAudioFormat(formats.filter { it.isAudio }, AudioQuality.HIGH, requireUrl = false)
                 if (video == null || audio == null) {
                     log("${client.clientName}: no formats")
@@ -133,12 +168,14 @@ object VideoStreams {
                     audioUrl = audioUrl,
                     videoLength = video.contentLength ?: -1L,
                     audioLength = audio.contentLength ?: -1L,
-                    height = video.height,
+                    height = side(video.width, video.height).takeIf { it > 0 } ?: video.height,
                     headers = headersFor(client),
                     client = client.clientName,
                     storyboardSpec = storyboard,
                     statsUrl = statsUrl,
-                    heights = videoFormats.mapNotNull { it.height }.filter { it >= 144 }.distinct().sortedDescending(),
+                    heights = videoFormats.map { side(it.width, it.height) }.filter { it >= 144 }.distinct().sortedDescending(),
+                    audioTracks = tracks,
+                    audioTrack = wanted?.id,
                 )
             } catch (e: CancellationException) {
                 throw e
@@ -148,6 +185,56 @@ object VideoStreams {
             }
         }
         error(lastProblem)
+    }
+
+    /** A format's quality, as its shorter side (0 when it doesn't say). */
+    private fun side(width: Int?, height: Int?): Int = listOfNotNull(width, height).filter { it > 0 }.minOrNull() ?: 0
+
+    /** Clients whose live playlists play without a PO token, best first. */
+    private val liveClients = listOf(YouTubeClient.IOS, YouTubeClient.TVHTML5, YouTubeClient.WEB)
+
+    /**
+     * A live stream: its HLS playlist (picture and sound together, which the player follows as
+     * the stream goes on), from the first client that gives one.
+     */
+    private suspend fun liveStream(videoId: String, config: PlayerConfig, visitorData: String, log: (String) -> Unit): Stream? {
+        val innerTube = YouTube.extractionTransport().innerTube
+        for (client in liveClients) {
+            try {
+                val text = innerTube.player(
+                    client = client,
+                    videoId = videoId,
+                    playlistId = null,
+                    signatureTimestamp = config.signatureTimestamp,
+                    poToken = null,
+                    requestVisitorData = visitorData.ifBlank { null },
+                    encryptedHostFlags = null,
+                ).bodyAsText()
+                val root = JSONObject(text)
+                val hls = root.optJSONObject("streamingData")?.optString("hlsManifestUrl")?.takeIf { it.isNotBlank() }
+                if (hls == null) {
+                    log("${client.clientName}: no live playlist (${root.optJSONObject("playabilityStatus")?.optString("status")})")
+                    continue
+                }
+                log("${client.clientName}: live HLS")
+                return Stream(
+                    videoUrl = hls,
+                    audioUrl = hls,
+                    videoLength = -1L,
+                    audioLength = -1L,
+                    height = null,
+                    headers = headersFor(client),
+                    client = client.clientName,
+                    storyboardSpec = null,
+                    statsUrl = root.optJSONObject("playbackTracking")?.optJSONObject("videostatsPlaybackUrl")?.optString("baseUrl")?.takeIf { it.isNotBlank() },
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("${client.clientName} live failed: ${e::class.simpleName}")
+            }
+        }
+        return null
     }
 
     private fun headersFor(client: YouTubeClient): Map<String, String> = buildMap {

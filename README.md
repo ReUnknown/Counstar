@@ -28,11 +28,18 @@ springy, physical motion.
 
 - Sign in with Google and get your own home feed, with its filter chips
 - Subscriptions, history and notifications
-- Search
+- Search, with suggestions (channels right in them), quick matches and your history
+- Live streams, with a LIVE button that catches you up
+- Shorts: their own tab, shelves in your feed and search, swipe-up player with double-tap likes (or turn them off)
+- Dubbed videos: pick the audio language
 - Full-screen and floating mini player: the video keeps playing in the corner as you browse
+- Background play, with controls in the notification and on the lock screen
+- Opens YouTube links, or share one to Counstar from any app
 - Like and subscribe
 - Ambient glow on the watch page, taken live from the video
 - Up next with filters: everything, the same channel, or what you haven't watched
+- Creators' posts and polls: on channels, in your feed, with their comments
+- Channel pages with big banners, and videos sorted by latest, popular or oldest
 - Updates itself from GitHub releases
 
 ## Install

@@ -1,5 +1,12 @@
 package app.counstar.ui.home
 
+import android.content.Context
+import android.widget.Toast
+import app.counstar.data.FeedEntry
+import app.counstar.data.mix
+import app.counstar.ui.posts.PostCard
+import androidx.compose.ui.platform.LocalContext
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -63,6 +70,7 @@ fun FeedScreen(
     refreshOffset: Dp,
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val list = rememberLazyListState()
     var refreshing by remember { mutableStateOf(false) }
     val haptics = app.counstar.ui.components.rememberHaptics()
@@ -92,7 +100,7 @@ fun FeedScreen(
             scope.launch {
                 haptics.tick()
                 refreshing = true
-                feed.refresh()
+                if (!feed.refresh()) refreshFailed(context)
                 list.scrollToItem(0)
                 refreshing = false
             }
@@ -105,8 +113,14 @@ fun FeedScreen(
             verticalArrangement = Arrangement.spacedBy(24.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            items(feed.items, key = { it.id }) { item ->
-                VideoCard(item, onClick = { Nav.watch(item) }, modifier = Modifier.animateItem())
+            // Videos, with creators' posts where YouTube puts them.
+            items(mix(feed.items, feed.posts, shorts = feed.shorts), key = { it.key }) { e ->
+                when (e) {
+                    is FeedEntry.Video -> VideoCard(e.item, onClick = { Nav.watch(e.item) }, modifier = Modifier.animateItem())
+                    is FeedEntry.PostEntry -> PostCard(e.post, modifier = Modifier.animateItem())
+                    is FeedEntry.Channel -> {}
+                    is FeedEntry.Shorts -> app.counstar.ui.shorts.ShortsRow(e.shelf, Modifier.animateItem())
+                }
             }
             when {
                 feed.error != null && feed.items.isEmpty() -> item(key = "error") {
@@ -121,6 +135,11 @@ fun FeedScreen(
             }
         }
     }
+}
+
+/** Says a pull to refresh didn't work (the list that was there stays). */
+fun refreshFailed(context: Context) {
+    Toast.makeText(context, "Couldn't refresh. Check your connection.", Toast.LENGTH_SHORT).show()
 }
 
 @Composable

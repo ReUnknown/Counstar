@@ -16,6 +16,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Headphones
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -72,6 +76,30 @@ fun SettingsSheet(onDismiss: () -> Unit) {
                 }
                 Switch(checked = Settings.ambientGlow, onCheckedChange = { Settings.saveAmbientGlow(it) })
             }
+            Tile(RoundedCornerShape(6.dp), onClick = { Settings.saveShowShorts(!Settings.showShorts) }) {
+                Icon(Icons.Rounded.PlayCircle, contentDescription = null, tint = colors.primary)
+                Column(Modifier.weight(1f)) {
+                    Text("Shorts", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text("The Shorts tab and Shorts in feeds and search. Off: Shorts open as normal videos", fontSize = 13.sp, lineHeight = 17.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+                }
+                Switch(checked = Settings.showShorts, onCheckedChange = { Settings.saveShowShorts(it) })
+            }
+            Tile(RoundedCornerShape(6.dp), onClick = { Settings.saveShowPosts(!Settings.showPosts) }) {
+                Icon(Icons.Rounded.Forum, contentDescription = null, tint = colors.primary)
+                Column(Modifier.weight(1f)) {
+                    Text("Posts", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Creators' posts and polls, in your feeds and on channels", fontSize = 13.sp, lineHeight = 17.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+                }
+                Switch(checked = Settings.showPosts, onCheckedChange = { Settings.saveShowPosts(it) })
+            }
+            Tile(RoundedCornerShape(6.dp), onClick = { Settings.saveBackgroundPlay(!Settings.backgroundPlay) }) {
+                Icon(Icons.Rounded.Headphones, contentDescription = null, tint = colors.primary)
+                Column(Modifier.weight(1f)) {
+                    Text("Background play", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Keeps playing when you leave Counstar or lock your phone", fontSize = 13.sp, lineHeight = 17.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+                }
+                Switch(checked = Settings.backgroundPlay, onCheckedChange = { Settings.saveBackgroundPlay(it) })
+            }
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -99,6 +127,21 @@ fun SettingsSheet(onDismiss: () -> Unit) {
 
             Label("Counstar")
             Tile(RoundedCornerShape(24.dp, 24.dp, 6.dp, 6.dp), onClick = {
+                // Android only sends youtube.com links to Counstar once you add them here.
+                context.startActivity(
+                    android.content.Intent(
+                        android.provider.Settings.ACTION_APP_OPEN_BY_DEFAULT_SETTINGS,
+                        android.net.Uri.parse("package:${context.packageName}"),
+                    ),
+                )
+            }) {
+                Icon(Icons.Rounded.Link, contentDescription = null, tint = colors.primary)
+                Column(Modifier.weight(1f)) {
+                    Text("Open YouTube links", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Add youtube.com and youtu.be under \"Open by default\"", fontSize = 12.sp, color = colors.onSurfaceVariant)
+                }
+            }
+            Tile(RoundedCornerShape(6.dp), onClick = {
                 scope.launch {
                     when (val s = update) {
                         is Updater.State.Available -> Updater.download(context, s.release)

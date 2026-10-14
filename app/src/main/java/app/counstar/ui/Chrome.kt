@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Subscriptions
@@ -115,7 +117,7 @@ fun ChipButton(title: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** YouTube-sized bottom bar: Home, Subscriptions, and You (your photo). */
+/** YouTube-sized bottom bar: Home, Shorts (unless they're off), Subscriptions, and You (your photo). */
 @Composable
 fun BottomBar(session: Session, bottomInset: Dp) {
     Row(
@@ -125,6 +127,11 @@ fun BottomBar(session: Session, bottomInset: Dp) {
         val searching = Nav.overlay
         BarItem("Home", Nav.tab == Tab.Home && !searching, Modifier.weight(1f), onClick = { Nav.goTo(Tab.Home) }) { on ->
             Icon(if (on) Icons.Rounded.Home else Icons.Outlined.Home, contentDescription = null, modifier = Modifier.size(25.dp))
+        }
+        if (app.counstar.data.Settings.showShorts) {
+            BarItem("Shorts", (Nav.tab == Tab.Shorts && !searching) || Nav.shorts != null, Modifier.weight(1f), onClick = { Nav.goTo(Tab.Shorts) }) { on ->
+                Icon(if (on) Icons.Rounded.PlayCircle else Icons.Outlined.PlayCircle, contentDescription = null, modifier = Modifier.size(25.dp))
+            }
         }
         BarItem("Subscriptions", Nav.tab == Tab.Subscriptions && !searching, Modifier.weight(1f), onClick = { Nav.goTo(Tab.Subscriptions) }) { on ->
             Icon(if (on) Icons.Rounded.Subscriptions else Icons.Outlined.Subscriptions, contentDescription = null, modifier = Modifier.size(25.dp))

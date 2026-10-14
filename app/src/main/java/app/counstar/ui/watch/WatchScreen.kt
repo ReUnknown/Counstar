@@ -580,7 +580,7 @@ private fun bellIcon(kind: BellOption.Kind): ImageVector = when (kind) {
 }
 
 /** 950, 1.2K, 48K, 3.4M: like YouTube writes counts. */
-private fun compact(n: Long): String = when {
+internal fun compact(n: Long): String = when {
     n < 1_000 -> n.toString()
     n < 10_000 -> DecimalFormat("0.#").format(n / 1_000.0) + "K"
     n < 1_000_000 -> (n / 1_000).toString() + "K"

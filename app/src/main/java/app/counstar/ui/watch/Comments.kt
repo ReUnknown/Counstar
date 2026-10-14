@@ -115,9 +115,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** A list of comments (or one comment's replies), a page at a time. */
+/**
+ * A list of comments (or one comment's replies), a page at a time. A video's come through
+ * "next"; a post's through "browse" ([browse]).
+ */
 @Stable
-class CommentList(firstToken: String?, private val replies: Boolean) {
+class CommentList(firstToken: String?, private val replies: Boolean, private val browse: Boolean = false) {
     var comments by mutableStateOf<List<Comment>>(emptyList())
         private set
     var loading by mutableStateOf(false)
@@ -167,7 +170,9 @@ class CommentList(firstToken: String?, private val replies: Boolean) {
         loading = true
         job = scope.launch {
             try {
-                withContext(Dispatchers.IO) { WebApi.nextContinuation(token).mapCatching { YouTubeParser.comments(it, replies) } }
+                withContext(Dispatchers.IO) {
+                    (if (browse) WebApi.browseContinuation(token) else WebApi.nextContinuation(token)).mapCatching { YouTubeParser.comments(it, replies) }
+                }
                     .onSuccess { page ->
                         page.count?.let { count = it }
                         page.createParams?.let { createParams = it }
@@ -186,10 +191,10 @@ class CommentList(firstToken: String?, private val replies: Boolean) {
     }
 }
 
-/** A video's comments: the list, its count, and the orders it can be sorted in. */
+/** A video's (or post's: [browse]) comments: the list, its count, and the orders it can be sorted in. */
 @Stable
-class CommentsState(firstToken: String, val sorts: List<Chip>, private val knownCount: String?) {
-    val list = CommentList(firstToken, replies = false)
+class CommentsState(firstToken: String, val sorts: List<Chip>, private val knownCount: String?, val browse: Boolean = false) {
+    val list = CommentList(firstToken, replies = false, browse = browse)
     var sort by mutableIntStateOf(0)
         private set
     val count: String? get() = knownCount ?: list.count?.removeSuffix(" Comments")?.removeSuffix(" comments")
@@ -245,12 +250,20 @@ fun CommentsCard(state: CommentsState, onOpen: () -> Unit) {
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun CommentsPanel(state: CommentsState, onClose: () -> Unit, modifier: Modifier = Modifier) {
+fun CommentsPanel(
+    state: CommentsState,
+    /** Null when the comments are the page itself (a post's): no X, back belongs to the page. */
+    onClose: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+    /** Above the comments, scrolling with them (a post, over its comments). */
+    header: (androidx.compose.foundation.lazy.LazyListScope.() -> Unit)? = null,
+    background: Color = MaterialTheme.colorScheme.surfaceContainerLow,
+) {
     var thread by remember(state) { mutableStateOf<Comment?>(null) }
-    BackHandler { if (thread != null) thread = null else onClose() }
+    BackHandler(enabled = thread != null || onClose != null) { if (thread != null) thread = null else onClose?.invoke() }
     LaunchedEffect(state) { state.start() }
     val colors = MaterialTheme.colorScheme
-    Column(modifier.fillMaxSize().background(colors.surfaceContainerLow).blockTouches()) {
+    Column(modifier.fillMaxSize().background(background).blockTouches()) {
         AnimatedContent(
             targetState = thread,
             transitionSpec = {
@@ -262,24 +275,32 @@ fun CommentsPanel(state: CommentsState, onClose: () -> Unit, modifier: Modifier 
         ) { open ->
             if (open == null) {
                 Column(Modifier.fillMaxSize()) {
-                    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Comments", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.4).sp)
-                        state.count?.let {
-                            Text(it, fontSize = 16.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(start = 10.dp))
+                    val title: @Composable () -> Unit = { Column {
+                        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 6.dp).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Comments", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.4).sp)
+                            state.count?.let {
+                                Text(it, fontSize = 16.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(start = 10.dp))
+                            }
+                            Spacer(Modifier.weight(1f))
+                            if (onClose != null) IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, contentDescription = "Close comments") }
                         }
-                        Spacer(Modifier.weight(1f))
-                        IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, contentDescription = "Close comments") }
-                    }
-                    if (state.sorts.isNotEmpty()) {
-                        Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            state.sorts.forEachIndexed { i, chip -> ChipButton(chip.title, state.sort == i) { state.selectSort(i) } }
+                        if (state.sorts.isNotEmpty()) {
+                            Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                state.sorts.forEachIndexed { i, chip -> ChipButton(chip.title, state.sort == i) { state.selectSort(i) } }
+                            }
                         }
-                    }
-                    HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.5f))
+                        HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.5f))
+                    } }
+                    // With a header, the title scrolls with it (under the post); otherwise it stays put.
+                    if (header == null) title()
                     val list = rememberLazyListState()
-                    LaunchedEffect(state.sort) { list.scrollToItem(0) }
+                    LaunchedEffect(state.sort) { if (header == null) list.scrollToItem(0) }
                     LoadMoreNearEnd(list, state.list)
                     LazyColumn(state = list, modifier = Modifier.weight(1f), contentPadding = PaddingValues(top = 4.dp, bottom = 16.dp)) {
+                        if (header != null) {
+                            header()
+                            item(key = "comments-title") { title() }
+                        }
                         itemsIndexed(state.list.comments, key = { _, c -> c.id }) { _, c ->
                             CommentRow(c, avatar = 36.dp, onOpen = { thread = c }, onReply = { thread = c }, showReplies = true)
                         }
@@ -294,7 +315,7 @@ fun CommentsPanel(state: CommentsState, onClose: () -> Unit, modifier: Modifier 
                     )
                 }
             } else {
-                Thread(open, onBack = { thread = null }, onClose = onClose)
+                Thread(open, browse = state.browse, onBack = { thread = null }, onClose = onClose ?: { thread = null })
             }
         }
     }
@@ -341,9 +362,9 @@ private fun depths(replies: List<Comment>): List<Int> {
 /** One comment's thread: the comment highlighted at the top, its replies nested below it. */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun Thread(parent: Comment, onBack: () -> Unit, onClose: () -> Unit) {
+private fun Thread(parent: Comment, browse: Boolean, onBack: () -> Unit, onClose: () -> Unit) {
     val colors = MaterialTheme.colorScheme
-    val replies = remember(parent.id) { CommentList(parent.repliesToken, replies = true) }
+    val replies = remember(parent.id) { CommentList(parent.repliesToken, replies = true, browse = browse) }
     var replyTo by remember(parent.id) { mutableStateOf<Comment?>(null) }
     LaunchedEffect(replies) { replies.start() }
     Column(Modifier.fillMaxSize()) {

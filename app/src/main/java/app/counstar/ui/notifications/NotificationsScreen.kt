@@ -147,7 +147,7 @@ private fun open(n: Notification) {
     // "Channel uploaded: Title" → "Title", until the watch page fills in the real details.
     val title = n.message.substringAfter(": ", n.message)
     Nav.notificationsOpen = false
-    Nav.watch(VideoItem(id = id, title = title, thumbnail = n.thumbnail ?: "https://i.ytimg.com/vi/$id/hqdefault.jpg"))
+    Nav.watch(VideoItem(id = id, title = title, thumbnail = n.thumbnail ?: "https://i.ytimg.com/vi/$id/hqdefault.jpg", isShort = n.short))
 }
 
 /** One notification, compact, in a rounded stack with the others from the same stretch of time. */

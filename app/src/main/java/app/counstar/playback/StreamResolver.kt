@@ -43,6 +43,8 @@ class VideoStream(
     val storyboardSpec: String? = null,
     val statsUrl: String? = null,
     val heights: List<Int> = emptyList(),
+    val audioTracks: List<VideoStreams.AudioTrack> = emptyList(),
+    val audioTrack: String? = null,
 ) {
     /** An HLS manifest: picture and sound together, which the player streams as one. */
     val isHls: Boolean get() = videoUrl == audioUrl || "/manifest/hls" in videoUrl || ".m3u8" in videoUrl
@@ -56,6 +58,8 @@ object StreamResolver {
 
     /** A quality picked for the current video, over the setting. */
     @Volatile var heightOverride: Int? = null
+    /** An audio track picked for the current video (null: its original). */
+    @Volatile var audioTrackOverride: String? = null
 
     @Volatile private var applicationContext: Context? = null
     @Volatile private var currentBundle: Bundle? = null
@@ -76,18 +80,39 @@ object StreamResolver {
         if (applicationContext == null) applicationContext = context.applicationContext
     }
 
-    suspend fun resolve(videoId: String): Result<VideoStream> =
+    /** Streams resolved ahead of time (the next Shorts), with when: links last a few hours, kept 10 minutes. */
+    private val ready = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, VideoStream>>()
+    private val pending = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** Resolves [videoId] now so playing it later starts at once. */
+    suspend fun prefetch(videoId: String) {
+        if (ready[videoId]?.let { System.currentTimeMillis() - it.first < READY_MS } == true || !pending.add(videoId)) return
         try {
-            Result.success(direct(videoId))
+            resolve(videoId, cached = false).onSuccess { ready[videoId] = System.currentTimeMillis() to it }
+        } finally {
+            pending.remove(videoId)
+        }
+    }
+
+    suspend fun resolve(videoId: String, live: Boolean = false, cached: Boolean = true): Result<VideoStream> {
+        // A prefetched stream, if nothing about the choice (quality, audio) has changed since.
+        if (cached && heightOverride == null && audioTrackOverride == null) {
+            ready.remove(videoId)?.takeIf { System.currentTimeMillis() - it.first < READY_MS }?.let { return Result.success(it.second) }
+        }
+        return try {
+            Result.success(direct(videoId, live))
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             Timber.tag(TAG).w("direct video failed (%s), trying InnerTubeX", error.message)
             viaExtractor(videoId)
         }
+    }
+
+    private const val READY_MS = 10 * 60_000L
 
     /** Counstar's own path: separate video and audio links from one player response. */
-    private suspend fun direct(videoId: String): VideoStream {
+    private suspend fun direct(videoId: String, live: Boolean): VideoStream {
         val bundle = bundle()
         val stream = VideoStreams.resolve(
             videoId = videoId,
@@ -98,6 +123,8 @@ object StreamResolver {
             cipher = bundle.cipherService,
             poToken = { id, visitorData -> tokenProvider.getPoToken(id, visitorData, YouTube.cookie) },
             log = { Timber.tag(TAG).d(it) },
+            live = live,
+            audioTrack = audioTrackOverride,
         )
         return VideoStream(
             videoId = videoId,
@@ -111,6 +138,8 @@ object StreamResolver {
             storyboardSpec = stream.storyboardSpec,
             statsUrl = stream.statsUrl,
             heights = stream.heights,
+            audioTracks = stream.audioTracks,
+            audioTrack = stream.audioTrack,
         )
     }
 

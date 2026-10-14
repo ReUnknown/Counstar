@@ -35,6 +35,12 @@ class Feed(
     /** Channels in the first page (search results). */
     var channels by mutableStateOf<List<ChannelItem>>(emptyList())
         private set
+    /** Creators' posts, each placed after [Post.after] of [items]. */
+    var posts by mutableStateOf<List<Post>>(emptyList())
+        private set
+    /** Rows of Shorts, each placed after [ShortsShelf.after] of [items]. */
+    var shorts by mutableStateOf<List<ShortsShelf>>(emptyList())
+        private set
     private var continuation: String? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var job: Job? = null
@@ -55,6 +61,8 @@ class Feed(
                         continuation = page.continuation
                         if (page.chips.isNotEmpty()) chips = page.chips
                         channels = page.channels
+                        posts = page.posts
+                        shorts = page.shorts
                         loadedOnce = true
                     }
                     .onFailure { error = "Couldn't load videos. Check your connection and try again." }
@@ -67,15 +75,18 @@ class Feed(
     /**
      * Pull to refresh. YouTube hands back mostly the same first page for a while, so what you
      * haven't seen yet goes to the top (another page is fetched if there's too little new), and
-     * what you've already seen follows.
+     * what you've already seen follows. Returns false if it couldn't load (what's showing stays).
      */
-    suspend fun refresh() {
+    suspend fun refresh(): Boolean {
         val seen = items.mapTo(HashSet()) { it.id }
         job?.cancel()
         loading = true
         error = null
         try {
-            val first = parse { first() }.getOrNull() ?: return
+            val first = parse { first() }.getOrElse {
+                if (items.isEmpty()) error = "Couldn't load videos. Check your connection and try again."
+                return false
+            }
             var fresh = first.items.filter { it.id !in seen }
             var next = first.continuation
             var all = first.items
@@ -90,7 +101,10 @@ class Feed(
             continuation = next
             if (first.chips.isNotEmpty()) chips = first.chips
             channels = first.channels
+            posts = first.posts
+            shorts = first.shorts
             loadedOnce = true
+            return true
         } finally {
             loading = false
         }
@@ -107,8 +121,12 @@ class Feed(
                     .onSuccess { page ->
                         val seen = items.mapTo(HashSet()) { it.id }
                         val fresh = page.items.filter { it.id !in seen }
+                        val before = items.size
+                        val seenPosts = posts.mapTo(HashSet()) { it.id }
+                        posts = posts + page.posts.filter { it.id !in seenPosts }.map { it.copy(after = before + it.after) }
+                        shorts = shorts + page.shorts.map { it.copy(after = before + it.after) }
                         items = items + fresh
-                        continuation = page.continuation?.takeIf { it != token && fresh.isNotEmpty() }
+                        continuation = page.continuation?.takeIf { it != token && (fresh.isNotEmpty() || page.posts.isNotEmpty()) }
                     }
                     .onFailure { continuation = null }
             } finally {
@@ -134,8 +152,178 @@ class Feed(
         /** A channel's videos tab, newest first. */
         fun channelVideos(channelId: String) = Feed({ YouTube.rawBrowse(browseId = channelId, params = "EgZ2aWRlb3PyBgQKAjoA") }, { WebApi.browseContinuation(it) })
 
+        /** Your watch history, just what matches [query] (YouTube's "Search watch history"). */
+        fun historySearch(query: String) = Feed(
+            { WebApi.post("browse", org.json.JSONObject().put("browseId", "FEhistory").put("query", query)) },
+            { WebApi.browseContinuation(it) },
+        )
+
+        /** A channel's posts (its Posts tab, by the params the channel page gives for it). */
+        fun channelPosts(channelId: String, params: String) = channelTab(channelId, params)
+
         /** Up next for a video, starting from the watch page JSON already fetched. */
         fun upNext(watchJson: String) = Feed({ Result.success(watchJson) }, { WebApi.nextContinuation(it) })
+    }
+}
+
+/** What a feed shows, in order: videos, with posts and channels where YouTube put them. */
+sealed interface FeedEntry {
+    val key: String
+
+    data class Video(val item: VideoItem) : FeedEntry {
+        override val key get() = "v" + item.id
+    }
+
+    data class PostEntry(val post: Post) : FeedEntry {
+        override val key get() = "p" + post.id
+    }
+
+    data class Channel(val channel: ChannelItem) : FeedEntry {
+        override val key get() = "c" + channel.id
+    }
+
+    data class Shorts(val shelf: ShortsShelf) : FeedEntry {
+        override val key get() = "s" + shelf.after + "-" + shelf.items.first().id
+    }
+}
+
+/**
+ * [items] with [posts] and [channels] mixed in where they came ([Post.after]). Posts beyond the
+ * videos (a Posts tab has only posts) follow at the end.
+ */
+fun mix(
+    items: List<VideoItem>,
+    posts: List<Post> = emptyList(),
+    channels: List<ChannelItem> = emptyList(),
+    shorts: List<ShortsShelf> = emptyList(),
+): List<FeedEntry> {
+    // Posts or Shorts turned off in Settings: never shown (Shorts among the videos too).
+    val hidden = if (Settings.showShorts) emptySet() else items.filter { it.isShort }.mapTo(HashSet()) { it.id }
+    val postsAt = posts.takeIf { Settings.showPosts }.orEmpty().groupBy { it.after.coerceIn(0, items.size) }
+    val channelsAt = channels.groupBy { it.after.coerceIn(0, items.size) }
+    val shortsAt = shorts.takeIf { Settings.showShorts }.orEmpty().filter { it.items.isNotEmpty() }.groupBy { it.after.coerceIn(0, items.size) }
+    return buildList {
+        for (i in 0..items.size) {
+            channelsAt[i]?.forEach { add(FeedEntry.Channel(it)) }
+            postsAt[i]?.forEach { add(FeedEntry.PostEntry(it)) }
+            shortsAt[i]?.forEach { add(FeedEntry.Shorts(it)) }
+            items.getOrNull(i)?.takeIf { it.id !in hidden }?.let { add(FeedEntry.Video(it)) }
+        }
+    }.distinctBy { it.key }
+}
+
+/**
+ * A channel tab that can be re-sorted (Latest, Popular, Oldest): the tab's own feed, or the one
+ * a picked order loads. The orders come with the tab's first page.
+ */
+@androidx.compose.runtime.Stable
+class SortedFeed(private val base: Feed) {
+    private var picked by mutableStateOf<Chip?>(null)
+    private var pickedFeed by mutableStateOf<Feed?>(null)
+
+    val feed: Feed get() = pickedFeed ?: base
+    val sorts: List<Chip> get() = base.chips
+    val selected: String? get() = picked?.title ?: sorts.firstOrNull { it.selected }?.title ?: sorts.firstOrNull()?.title
+
+    fun pick(chip: Chip) {
+        val token = chip.token
+        if (token == null || chip == sorts.firstOrNull { it.selected } || chip == sorts.firstOrNull()) {
+            picked = null
+            pickedFeed = null
+            return
+        }
+        if (chip == picked) return
+        picked = chip
+        pickedFeed = Feed.browseFrom(token)
+    }
+}
+
+/**
+ * Shorts to swipe through: the one you opened (if any), then the ones YouTube lines up after it,
+ * a page at a time. With no Short to start from (the Shorts tab), it starts from one of your
+ * home feed's, or a Shorts search's.
+ */
+@androidx.compose.runtime.Stable
+class ShortsQueue(seed: VideoItem?) {
+    var items by mutableStateOf(listOfNotNull(seed?.copy(isShort = true)))
+        private set
+    var loading by mutableStateOf(false)
+        private set
+    var failed by mutableStateOf(false)
+        private set
+    private var next: String? = null
+    private var started = false
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    fun start() {
+        if (started) return
+        started = true
+        loading = true
+        scope.launch {
+            try {
+                if (items.isEmpty()) items = findSeeds()
+                val first = items.firstOrNull()
+                if (first == null) {
+                    failed = true
+                    return@launch
+                }
+                page(personalSequence(first.id) ?: first.sequenceParams ?: WebApi.shortSequence(first.id))
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    /** More, when you're near the end. */
+    fun loadMore() {
+        val token = next ?: return
+        if (loading) return
+        loading = true
+        scope.launch {
+            try {
+                page(token)
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    private suspend fun page(params: String) {
+        withContext(Dispatchers.IO) { WebApi.reelSequence(params).mapCatching(YouTubeParser::shortsSequence) }
+            .onSuccess { (more, token) ->
+                val seen = items.mapTo(HashSet()) { it.id }
+                items = items + more.filter { seen.add(it.id) }
+                next = token?.takeIf { it != params && more.isNotEmpty() }
+            }
+            .onFailure { next = null }
+    }
+
+    /**
+     * Where the Shorts tab starts: the Shorts YouTube picked for you on your home feed (signed
+     * in, that's your own taste), else a Shorts search's.
+     */
+    private suspend fun findSeeds(): List<VideoItem> {
+        val home = Feeds.home.shorts.flatMap { it.items }.ifEmpty {
+            withContext(Dispatchers.IO) { YouTube.rawBrowse(browseId = "FEwhat_to_watch").mapCatching { YouTubeParser.feed(it) } }
+                .getOrNull()?.shorts?.flatMap { it.items }.orEmpty()
+        }
+        if (home.isNotEmpty()) return home.distinctBy { it.id }.take(6)
+        return withContext(Dispatchers.IO) { YouTube.rawSearch(query = "shorts").mapCatching { YouTubeParser.feed(it) } }
+            .getOrNull()?.shorts?.flatMap { it.items }?.take(1).orEmpty()
+    }
+
+    /**
+     * Your own sequence after [videoId], when YouTube gives one (signed in): what the Shorts
+     * player in YouTube's app swipes through, from your watch history and likes.
+     */
+    private suspend fun personalSequence(videoId: String): String? = withContext(Dispatchers.IO) {
+        WebApi.post(
+            "reel/reel_item_watch",
+            org.json.JSONObject()
+                .put("playerRequest", org.json.JSONObject().put("videoId", videoId))
+                .put("params", "CA8%3D")
+                .put("disablePlayerResponse", true),
+        ).mapCatching { org.json.JSONObject(it).optString("sequenceContinuation").takeIf { s -> s.isNotBlank() } }.getOrNull()
     }
 }
 
@@ -144,6 +332,8 @@ object Feeds {
     var home = Feed.browse("FEwhat_to_watch"); private set
     var subscriptions = Feed.browse("FEsubscriptions"); private set
     var history = Feed.browse("FEhistory"); private set
+    /** The Shorts tab's Shorts. */
+    var shortsTab = ShortsQueue(null); private set
 
     /** The home chip that's selected (null: the first one, "All"), and its feed. */
     var homeChip by mutableStateOf<Chip?>(null); private set
@@ -172,6 +362,7 @@ object Feeds {
         home = Feed.browse("FEwhat_to_watch")
         subscriptions = Feed.browse("FEsubscriptions")
         history = Feed.browse("FEhistory")
+        shortsTab = ShortsQueue(null)
         homeChip = null
         homeChipFeed = null
         Library.clear()
@@ -248,8 +439,11 @@ class ChannelPage(val id: String) {
     var playlists by mutableStateOf<List<Playlist>?>(null)
         private set
     val home = Feed.channelTab(id, "EghmZWF0dXJlZPIGBAoCMgA=")
-    val videos = Feed.channelVideos(id)
-    val live = Feed.channelTab(id, "EgdzdHJlYW1z8gYECgJ6AA==")
+    val videos = SortedFeed(Feed.channelVideos(id))
+    val live = SortedFeed(Feed.channelTab(id, "EgdzdHJlYW1z8gYECgJ6AA=="))
+    /** The Posts tab, once the channel page says how to load it. */
+    val posts: Feed? get() = info?.tabParams?.let { it["Posts"] ?: it["Community"] }?.let { params -> postsFeed ?: Feed.channelPosts(id, params).also { postsFeed = it } }
+    private var postsFeed: Feed? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     fun load() {

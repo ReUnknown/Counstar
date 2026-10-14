@@ -120,6 +120,9 @@ class PlaybackState {
     var duration by mutableLongStateOf(0L)
     /** Width / height of the picture (16:9 until the video says otherwise). */
     var ratio by mutableFloatStateOf(16f / 9f)
+    /** A live stream, and whether it's at (or within a few seconds of) what's happening now. */
+    var live by mutableStateOf(false)
+    var atLiveEdge by mutableStateOf(true)
 }
 
 @Composable
@@ -132,6 +135,7 @@ fun rememberPlaybackState(player: Player): PlaybackState {
             state.duration = player.duration.coerceAtLeast(0L)
             state.position = player.currentPosition.coerceAtLeast(0L)
             state.buffered = player.bufferedPosition.coerceAtLeast(0L)
+            state.live = player.isCurrentMediaItemLive
             val size = player.videoSize
             if (size.width > 0 && size.height > 0) state.ratio = size.width * size.pixelWidthHeightRatio / size.height
         }
@@ -147,6 +151,8 @@ fun rememberPlaybackState(player: Player): PlaybackState {
             state.position = player.currentPosition.coerceAtLeast(0L)
             state.buffered = player.bufferedPosition.coerceAtLeast(0L)
             state.duration = player.duration.coerceAtLeast(0L)
+            state.live = player.isCurrentMediaItemLive
+            state.atLiveEdge = !state.live || player.currentLiveOffset.let { it == androidx.media3.common.C.TIME_UNSET || it < 15_000L }
             delay(200)
         }
     }
@@ -161,11 +167,11 @@ object Ambient {
 /** Just the picture, fitted into its box. [sampleAmbient] keeps [Ambient.frame] up to date. */
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-fun VideoSurface(modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Fit, sampleAmbient: Boolean = false) {
+fun VideoSurface(modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Fit, sampleAmbient: Boolean = false, alignment: Alignment = Alignment.Center) {
     val player = CounstarPlayer.player
     val presentation = rememberPresentationState(player)
     var texture by remember { mutableStateOf<TextureView?>(null) }
-    Box(modifier, contentAlignment = Alignment.Center) {
+    Box(modifier, contentAlignment = alignment) {
         AndroidView(
             factory = { context -> TextureView(context).also { texture = it; player.setVideoTextureView(it) } },
             onRelease = { player.clearVideoTextureView(it) },
@@ -178,8 +184,12 @@ fun VideoSurface(modifier: Modifier = Modifier, contentScale: ContentScale = Con
             val view = texture ?: return@LaunchedEffect
             while (true) {
                 if (view.isAvailable && player.videoSize.width > 0 && player.isPlaying) {
-                    view.getBitmap(48, 27)?.let { Ambient.frame = it.asImageBitmap() }
+                    // Small, in the video's own shape (a Short is tall), for blurring.
+                    val size = player.videoSize
+                    val h = (48f * size.height / size.width.coerceAtLeast(1)).toInt().coerceIn(16, 96)
+                    view.getBitmap(48, h)?.let { Ambient.frame = it.asImageBitmap() }
                 }
+                // A little longer than AmbientLight's 650 ms fade, so each fade finishes before the next frame.
                 delay(700)
             }
         }
@@ -460,13 +470,30 @@ fun VideoPlayer(
                     ) {
                         if (target == null) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    "${formatTime(state.position)} / ${formatTime(state.duration)}",
-                                    color = Color.White,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.padding(start = 6.dp),
-                                )
+                                if (state.live) {
+                                    // LIVE: red when you're watching what's happening now; grey
+                                    // when you've gone back, and tapping it catches you up.
+                                    Row(
+                                        Modifier
+                                            .padding(start = 4.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(if (state.atLiveEdge) YouTubeRed else Color.White.copy(alpha = 0.25f))
+                                            .clickable { CounstarPlayer.player.seekToDefaultPosition() }
+                                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Box(Modifier.size(6.dp).clip(CircleShape).background(Color.White))
+                                        Text("LIVE", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 5.dp))
+                                    }
+                                } else {
+                                    Text(
+                                        "${formatTime(state.position)} / ${formatTime(state.duration)}",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(start = 6.dp),
+                                    )
+                                }
                                 chapterAt(chapters, state.position)?.let {
                                     Text(
                                         "  •  ${it.title}",
@@ -502,7 +529,7 @@ fun chapterAt(chapters: List<Chapter>, positionMs: Long): Chapter? = chapters.la
 
 /** The caption line for now, over the bottom of the picture (above the controls when they show). */
 @Composable
-private fun BoxScope.Captions(positionMs: Long, fullscreen: Boolean, lifted: Boolean) {
+internal fun BoxScope.Captions(positionMs: Long, fullscreen: Boolean, lifted: Boolean) {
     if (CounstarPlayer.caption == null) return
     val cue = CounstarPlayer.cues.lastOrNull { it.startMs <= positionMs && positionMs < it.endMs } ?: return
     val lift by animateDpAsState(if (lifted) 64.dp else 12.dp, label = "captions")
