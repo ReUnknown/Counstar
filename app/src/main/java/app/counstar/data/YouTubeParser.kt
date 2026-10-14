@@ -1100,7 +1100,7 @@ object YouTubeParser {
             duration = text(v.optJSONObject("lengthText")),
             isLive = isLive,
             watched = resume?.optInt("percentDurationWatched", -1)?.takeIf { it >= 0 }?.div(100f),
-            isShort = v.optJSONObject("navigationEndpoint")?.has("reelWatchEndpoint") == true,
+            isShort = pointsToShort(v.optJSONObject("navigationEndpoint")) || "\"style\":\"SHORTS\"" in badges,
         )
     }
 
@@ -1129,7 +1129,14 @@ object YouTubeParser {
             duration = badge?.optString("text")?.takeIf { it.isNotBlank() && !isLive },
             isLive = isLive,
             watched = progress?.optInt("startPercent", -1)?.takeIf { it >= 0 }?.div(100f),
+            isShort = pointsToShort(l.optJSONObject("rendererContext")),
         )
+    }
+
+    /** A card that opens the Shorts player (a reel endpoint, or a /shorts/ link): it's a Short. */
+    private fun pointsToShort(o: JSONObject?): Boolean {
+        val raw = o?.toString() ?: return false
+        return "reelWatchEndpoint" in raw || "\\/shorts\\/" in raw || "/shorts/" in raw
     }
 
     /** simpleText, runs, or (view models) content. */

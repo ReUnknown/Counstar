@@ -1,6 +1,16 @@
 package app.counstar.ui.shorts
 
 import android.content.Intent
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
+import app.counstar.ui.components.backGesture
+import app.counstar.ui.components.predictiveBack
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.animation.core.animateDpAsState
@@ -126,6 +136,11 @@ import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
+/** Whether the playing Short's comments are up (the Shorts don't swipe while they are). */
+private object ShortsUi {
+    var commentsOpen by mutableStateOf(false)
+}
+
 /** Your likes on Shorts, kept while the app runs so the heart and double taps agree. */
 private object ShortLikes {
     val liked = mutableStateMapOf<String, Boolean>()
@@ -140,9 +155,11 @@ private object ShortLikes {
 @Composable
 fun ShortsPlayer(queue: ShortsQueue, onClose: (() -> Unit)?, active: Boolean = true, bottomInset: Dp = 0.dp) {
     LaunchedEffect(queue) { queue.start() }
-    if (onClose != null) BackHandler(onBack = onClose)
+    // Back, the system's predictive way like every page: the Shorts shrink as you swipe and
+    // close when you let go. On the Shorts tab, back goes home.
+    val back = predictiveBack(enabled = active) { onClose?.invoke() ?: Nav.goTo(app.counstar.ui.Tab.Home) }
     val items = queue.items
-    Box(Modifier.fillMaxSize().background(Color.Black).blockTouches()) {
+    Box(Modifier.fillMaxSize().backGesture(back).background(Color.Black).blockTouches()) {
         if (items.isEmpty()) {
             if (queue.failed) {
                 Text("Couldn't load Shorts.", color = Color.White, modifier = Modifier.align(Alignment.Center).padding(32.dp))
@@ -189,7 +206,7 @@ fun ShortsPlayer(queue: ShortsQueue, onClose: (() -> Unit)?, active: Boolean = t
                 }
             }
         }
-        VerticalPager(pager, beyondViewportPageCount = 1, key = { items[it].id }) { page ->
+        VerticalPager(pager, beyondViewportPageCount = 1, userScrollEnabled = !ShortsUi.commentsOpen, key = { items[it].id }) { page ->
             ShortPage(items[page], playing = active && page == pager.settledPage, onClose = onClose, bottomInset = bottomInset)
         }
     }
@@ -197,15 +214,8 @@ fun ShortsPlayer(queue: ShortsQueue, onClose: (() -> Unit)?, active: Boolean = t
 
 private class Heart(val id: Long, val at: Offset, val tilt: Float)
 
-/** Text over a video: a soft shadow keeps it readable on anything. */
-private val shadowed = TextStyle(shadow = Shadow(Color.Black.copy(alpha = 0.6f), Offset(0f, 1f), 8f))
-
-/** Keeps only the part of what's drawn under [brush]'s opaque stretch. */
-private fun Modifier.masked(brush: Brush) = graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-    .drawWithContent {
-        drawContent()
-        drawRect(brush, blendMode = BlendMode.DstIn)
-    }
+/** Text over a video: a small, soft shadow keeps it readable on anything. */
+private val shadowed = TextStyle(shadow = Shadow(Color.Black.copy(alpha = 0.75f), Offset(0f, 1.5f), 6f))
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -226,6 +236,8 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
     /** The play / pause flash after a tap: when, and whether it now plays. */
     var flash by remember(item.id) { mutableStateOf<Pair<Long, Boolean>?>(null) }
     BackHandler(commentsOpen) { commentsOpen = false }
+    LaunchedEffect(commentsOpen, playing) { if (playing) ShortsUi.commentsOpen = commentsOpen }
+    DisposableEffect(item.id) { onDispose { if (playing) ShortsUi.commentsOpen = false } }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
@@ -266,17 +278,6 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
                 VideoSurface(Modifier.fillMaxSize(), contentScale = ContentScale.Fit, sampleAmbient = true)
             } else {
                 AsyncImage(item.thumbnail, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
-            }
-            // Fade blur, top and bottom: the picture there frosts over, so what's written on it reads.
-            if (frame != null) {
-                Image(
-                    frame, null, contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize().blur(18.dp).masked(Brush.verticalGradient(0f to Color.Black, 0.12f to Color.Black, 0.2f to Color.Transparent)),
-                )
-                Image(
-                    frame, null, contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize().blur(18.dp).masked(Brush.verticalGradient(0.6f to Color.Transparent, 0.74f to Color.Black, 1f to Color.Black)),
-                )
             }
             Box(Modifier.fillMaxWidth().height(150.dp).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.45f), Color.Transparent))))
             Box(
@@ -434,11 +435,13 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
                 exit = slideOutVertically(tween(260)) { it } + fadeOut(tween(180)),
             ) {
                 comments?.let {
-                    CommentsPanel(
-                        it,
-                        onClose = { commentsOpen = false },
-                        modifier = Modifier.fillMaxHeight(0.68f).clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)).padding(bottom = bottomInset),
-                    )
+                    SwipeDownToClose(onClose = { commentsOpen = false }) {
+                        CommentsPanel(
+                            it,
+                            onClose = { commentsOpen = false },
+                            modifier = Modifier.fillMaxHeight(0.68f).clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)).padding(bottom = bottomInset),
+                        )
+                    }
                 }
             }
         }
@@ -482,6 +485,59 @@ private fun ShortPage(item: VideoItem, playing: Boolean, onClose: (() -> Unit)?,
             }
         }
     }
+}
+
+/**
+ * Comments that close when you pull them down: from the top of the list, or by the header.
+ * Let go far enough (or flick) and they close; otherwise they spring back.
+ */
+@Composable
+private fun SwipeDownToClose(onClose: () -> Unit, content: @Composable () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var drag by remember { mutableFloatStateOf(0f) }
+    val far = with(androidx.compose.ui.platform.LocalDensity.current) { 120.dp.toPx() }
+    fun settle(velocity: Float) {
+        if (drag > far || (drag > 0f && velocity > 1800f)) onClose()
+        else scope.launch { androidx.compose.animation.core.animate(drag, 0f, animationSpec = spring(stiffness = 600f)) { v, _ -> drag = v } }
+    }
+    val connection = remember {
+        object : NestedScrollConnection {
+            // Pulled down past the top of the list: the panel follows your finger.
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (available.y > 0f && source == NestedScrollSource.UserInput) {
+                    drag += available.y
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+
+            // Pushed back up: the panel first, then the list.
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (drag > 0f && available.y < 0f) {
+                    val take = maxOf(available.y, -drag)
+                    drag += take
+                    return Offset(0f, take)
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (drag <= 0f) return Velocity.Zero
+                settle(available.y)
+                return available
+            }
+        }
+    }
+    Box(
+        Modifier
+            .offset { IntOffset(0, drag.roundToInt()) }
+            .nestedScroll(connection)
+            .draggable(
+                rememberDraggableState { d -> drag = (drag + d).coerceAtLeast(0f) },
+                Orientation.Vertical,
+                onDragStopped = { v -> settle(v) },
+            ),
+    ) { content() }
 }
 
 /** After a tap: play or pause, big in the middle, popping in and fading away. */
@@ -606,6 +662,6 @@ private fun Rail(icon: ImageVector, label: String, tint: Color = Color.White, sc
         ) {
             Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(28.dp))
         }
-        Text(label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, textAlign = TextAlign.Center, modifier = Modifier.width(64.dp))
+        Text(label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, style = shadowed, maxLines = 1, textAlign = TextAlign.Center, modifier = Modifier.width(64.dp))
     }
 }
